@@ -1,0 +1,33 @@
+service:
+  name: Hopback
+  databasePath: data/hopback.sqlite
+  verbose: false
+  autoReply: true
+  testTtlMinutes: 20
+  agentSecret: change-this-secret
+  # privateKey: 128hex-private-key
+  # publicKey: 64hex-public-key
+
+coreScope:
+  urls:
+    - wss://analyzer.meshcore.cz
+    - wss://mc.pp0.co
+  nodeApiUrls:
+    - https://analyzer.meshcore.cz/api/nodes?limit=2000&offset=0
+    - https://mc.pp0.co/api/nodes?limit=2000&offset=0
+
+endpoints:
+  - id: kololec
+    host: test.kololec.cz
+    name: Kololeč
+    region: Okres Litoměřice, Ústecký Kraj, Česká Republika
+    publicKey: 5430101DB427C7E403D1D3C619C056C1BE969FC785ECC7B01774B5AD4BFCCA2B
+    # Contact type: 1 Companion, 2 Repeater, 3 Room Server, 4 Sensor.
+    type: 1
+    # Required for central backend decryption/replies. Omit if the endpoint agent verifies locally.
+    # privateKey: 128hex-private-key
+    # agentId: kololec-agent
+    location:
+      label: Kololeč, Okres Litoměřice, Ústecký Kraj, Česká Republika
+      lat: 50.478
+      lon: 13.975
