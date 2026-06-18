@@ -578,7 +578,6 @@
 				tests={history}
 				{ownTestIds}
 				loading={historyLoading}
-				animateRows
 				emptyText={t('tests.empty')}
 			/>
 			{#if historyLoading}
