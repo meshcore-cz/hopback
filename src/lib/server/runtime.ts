@@ -292,6 +292,10 @@ export class HopbackRuntime {
 			return {
 				id: endpoint.id,
 				name: endpoint.name,
+				region: endpoint.region,
+				publicKey: endpoint.publicKey,
+				host: endpoint.host,
+				location: endpoint.location,
 				ready: Boolean(agent?.ipcReady),
 				connected: Boolean(agent),
 				agentId: agent?.id || endpoint.agentId,

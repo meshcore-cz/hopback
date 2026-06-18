@@ -39,6 +39,7 @@
 	}
 
 	type PublicKeyMode = 'manual' | 'node';
+	type StatusEndpoint = RuntimeStatus['endpoints'][number];
 
 	let userPublicKey = $state('');
 	let publicKeyMode = $state<PublicKeyMode>('manual');
@@ -50,7 +51,6 @@
 	let nodeSearchTimer: ReturnType<typeof setTimeout> | null = null;
 	let nodeSearchSeq = 0;
 	let selectedEndpoint = $state('');
-	let configuredEndpoints = $state<EndpointConfig[]>([]);
 	let endpointsLoaded = $state(false);
 	let history = $state<DiagnosticTest[]>([]);
 	let historyLoading = $state(false);
@@ -61,7 +61,7 @@
 	let mounted = $state(false);
 	let statusPoller: ReturnType<typeof setInterval> | null = null;
 
-	let endpointOptions: EndpointOption[] = $derived(configuredEndpoints);
+	let endpointOptions: EndpointOption[] = $derived(status?.endpoints ?? []);
 	let selectedEndpointDetails = $derived(
 		endpointOptions.find((endpoint) => endpoint.id === selectedEndpoint)
 	);
@@ -123,15 +123,18 @@
 			if (stored) {
 				const parsed = JSON.parse(stored) as string[];
 				if (Array.isArray(parsed)) {
-					history = parsed.slice(0, 15).map((id) => ({
-						id,
-						status: 'waiting',
-						endpointName: '',
-						userPublicKey: '',
-						code: '',
-						createdAt: '',
-						observationCount: 0
-					} as DiagnosticTest));
+					history = parsed.slice(0, 15).map(
+						(id) =>
+							({
+								id,
+								status: 'waiting',
+								endpointName: '',
+								userPublicKey: '',
+								code: '',
+								createdAt: '',
+								observationCount: 0
+							}) as DiagnosticTest
+					);
 				}
 			}
 		} catch {
@@ -140,23 +143,14 @@
 	}
 
 	async function refresh() {
-		await Promise.all([loadStatus(), loadEndpoints(), loadHistory()]);
+		await Promise.all([loadStatus(), loadHistory()]);
 	}
 
 	async function loadStatus() {
 		const response = await fetch('/api/status');
 		status = await response.json();
-	}
-
-	async function loadEndpoints() {
-		try {
-			const response = await fetch('/api/nodes?limit=1');
-			const payload = (await response.json()) as { endpoints: EndpointConfig[] };
-			configuredEndpoints = payload.endpoints;
-			if (!selectedEndpoint && payload.endpoints[0]) selectedEndpoint = payload.endpoints[0].id;
-		} finally {
-			endpointsLoaded = true;
-		}
+		if (!selectedEndpoint && status?.endpoints[0]) selectedEndpoint = status.endpoints[0].id;
+		endpointsLoaded = true;
 	}
 
 	async function loadHistory() {
@@ -280,7 +274,11 @@
 				className: 'bg-teal-50 text-teal-800'
 			};
 		if (current === 'failed' || current === 'expired')
-			return { icon: AlertCircle, label: t(`status.${current}`), className: 'bg-red-50 text-red-800' };
+			return {
+				icon: AlertCircle,
+				label: t(`status.${current}`),
+				className: 'bg-red-50 text-red-800'
+			};
 		return {
 			icon: CircleDashed,
 			label: t(`status.${current}`),
@@ -289,7 +287,8 @@
 	}
 
 	function totalTime(test: DiagnosticTest) {
-		const unfinished = test.status === 'expired' || test.status === 'failed' ? '—' : t('common.pending');
+		const unfinished =
+			test.status === 'expired' || test.status === 'failed' ? '—' : t('common.pending');
 		if (!test.returnSeenAt) return unfinished;
 		const start = new Date(test.createdAt).getTime();
 		const end = new Date(test.returnSeenAt).getTime();
@@ -318,7 +317,7 @@
 		return t('time.weeksAgo', { n: Math.floor(delta / 604800) });
 	}
 
-	function endpointAgentStatus(endpointId: string) {
+	function endpointAgentStatus(endpointId: string): StatusEndpoint | undefined {
 		return status?.endpoints.find((endpoint) => endpoint.id === endpointId);
 	}
 
@@ -329,7 +328,8 @@
 	function endpointStatusLabel(endpointId: string) {
 		const current = endpointAgentStatus(endpointId);
 		if (!status || !current) return t('home.agent.checking');
-		if (current.ready) return `${t('home.agent.online')}${current.agentId ? ` · ${current.agentId}` : ''}`;
+		if (current.ready)
+			return `${t('home.agent.online')}${current.agentId ? ` · ${current.agentId}` : ''}`;
 		if (current.connected) return t('home.agent.ipcNotReady');
 		return t('home.agent.offline');
 	}
@@ -640,7 +640,8 @@
 					<Clock3 size={18} class="text-neutral-500" />
 					<h2 class="text-base font-semibold text-neutral-900">{t('history.title')}</h2>
 				</div>
-				<span class="text-xs text-neutral-500">{t('history.saved', { count: history.length })}</span>
+				<span class="text-xs text-neutral-500">{t('history.saved', { count: history.length })}</span
+				>
 			</div>
 
 			<div class="overflow-x-auto">
@@ -689,7 +690,7 @@
 									</span>
 								</td>
 								<td class="mono px-3 py-2 font-semibold text-neutral-800">{test.code}</td>
-									<td class="px-3 py-2 text-neutral-600">
+								<td class="px-3 py-2 text-neutral-600">
 									<span class={time === 'pending' || time === '—' ? 'opacity-50' : ''}>{time}</span>
 								</td>
 								<td class="px-3 py-2 text-neutral-600">

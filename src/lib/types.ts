@@ -177,6 +177,10 @@ export interface RuntimeStatus {
 	endpoints: Array<{
 		id: string;
 		name: string;
+		region: string;
+		publicKey: string;
+		host?: string;
+		location?: EndpointConfig['location'];
 		ready: boolean;
 		connected: boolean;
 		agentId?: string;
