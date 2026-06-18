@@ -1,3 +1,5 @@
+import { fetchJsonWithRetry } from './http';
+
 export interface ObserverRecord {
 	id: string;
 	name: string;
@@ -11,7 +13,6 @@ export interface ObserverRecord {
 	nodeRole?: string | null;
 	updatedAt: string;
 	source: string;
-	raw?: unknown;
 }
 
 export class ObserverDirectory {
@@ -30,14 +31,13 @@ export class ObserverDirectory {
 	async refreshAll() {
 		for (const url of this.observerApiUrls) {
 			try {
-				const response = await fetch(url);
-				if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-				const payload = await response.json();
+				const payload = await fetchJsonWithRetry(url, { label: 'observers', verbose: this.verbose });
 				const observers = normalizeObservers(payload, url);
 				for (const observer of observers) {
 					this.observers.set(observer.id, observer);
 				}
-				if (this.verbose) console.log(`[observers] loaded ${observers.length} observers from ${url}`);
+				if (this.verbose)
+					console.log(`[observers] loaded ${observers.length} observers from ${url}`);
 			} catch (error) {
 				console.warn(`[observers] failed to refresh ${url}:`, error);
 			}
@@ -48,12 +48,31 @@ export class ObserverDirectory {
 		return this.observers.size;
 	}
 
+	/**
+	 * Observers that reported a packet within the given window — i.e. currently
+	 * live on the mesh rather than every observer ever seen. Defaults to 5 minutes.
+	 */
+	activeCount(windowMs = 5 * 60 * 1000) {
+		const cutoff = Date.now() - windowMs;
+		let count = 0;
+		for (const observer of this.observers.values()) {
+			const lastSeen = observer.lastSeen ? new Date(observer.lastSeen).getTime() : NaN;
+			if (Number.isFinite(lastSeen) && lastSeen >= cutoff) count += 1;
+		}
+		return count;
+	}
+
 	list(): ObserverRecord[] {
 		return [...this.observers.values()];
 	}
 
 	findById(id: string): ObserverRecord | undefined {
-		return this.observers.get(id);
+		return (
+			this.observers.get(id) ||
+			[...this.observers.values()].find(
+				(observer) => observer.id.toLowerCase() === id.toLowerCase()
+			)
+		);
 	}
 }
 
@@ -78,13 +97,15 @@ function normalizeObserver(row: unknown, source: string, now: string): ObserverR
 	const id = stringField(record, 'id', 'public_key', 'publicKey', 'observer_id', 'observerId');
 	if (!id) return null;
 
-	const name = stringField(record, 'name', 'observer_name', 'observerName') || `Observer ${id.slice(0, 8)}`;
+	const name =
+		stringField(record, 'name', 'observer_name', 'observerName') || `Observer ${id.slice(0, 8)}`;
 
 	return {
 		id,
 		name,
 		iata: stringField(record, 'iata') ?? null,
-		lastSeen: stringField(record, 'last_seen', 'lastSeen', 'last_packet_at', 'lastPacketAt') ?? null,
+		lastSeen:
+			stringField(record, 'last_seen', 'lastSeen', 'last_packet_at', 'lastPacketAt') ?? null,
 		firstSeen: stringField(record, 'first_seen', 'firstSeen') ?? null,
 		packetCount: numberField(record, 'packet_count', 'packetCount', 'packetsLastHour') ?? null,
 		clientVersion: stringField(record, 'client_version', 'clientVersion') ?? null,
@@ -92,8 +113,7 @@ function normalizeObserver(row: unknown, source: string, now: string): ObserverR
 		lon: numberField(record, 'lon', 'lng', 'longitude') ?? null,
 		nodeRole: stringField(record, 'node_role', 'nodeRole', 'role') ?? null,
 		updatedAt: now,
-		source,
-		raw: row
+		source
 	};
 }
 

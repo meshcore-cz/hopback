@@ -1,6 +1,10 @@
 # Hopback
 
-Hopback is a SvelteKit diagnostic service for testing real connectivity between a user and MeshCore endpoints. A user enters their public key, selects an endpoint, receives a temporary code and QR contact card, then watches the outbound and return paths update as CoreScope and endpoint agents observe packets.
+MeshCore Test is a web-based diagnostic service for checking real connectivity between a user and selected [MeshCore](http://meshcore.io/) endpoints in different cities or regions. The user enters their public key, chooses an endpoint, and receives a temporary code and QR contact card. After sending the code over MeshCore, the page updates live as the message is detected, routed, received, verified, and answered.
+
+The interface visualizes both directions of the test: the path from the user to the endpoint and the return path back to the user. It can display resolved repeaters, hop counts, packet observations, timing, signal data, route differences, reply status, and whether the full round trip succeeded or only one direction worked.
+
+The service combines a simple web frontend, a central real-time backend, [CoreScope](https://github.com/Kpa-clawbot/CoreScope) analyzer data, and lightweight agents connected to MeshCore nodes. Its goal is to make MeshCore testing easy for normal users while also providing useful routing and radio diagnostics for network operators.
 
 ## Stack
 

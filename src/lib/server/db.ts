@@ -9,6 +9,7 @@ import type {
 	PacketObservation,
 	TestStatus
 } from '../types';
+import { withDerivedStatus } from '../milestones';
 
 export interface CreateTestInput {
 	browserId: string;
@@ -26,15 +27,13 @@ export interface ObservationInput {
 	packetHash: string;
 	observerId?: string | null;
 	observerName?: string | null;
-	firstSeen?: string | null;
-	rssi?: number | null;
-	snr?: number | null;
 	hopCount: number;
+	/** Raw per-hop short hashes. */
 	path: string[];
-	resolvedPath: NodeRecord[];
+	/** Resolution hints: resolved publicKey per hop (or null), aligned to {@link path}. */
+	pathKeys: (string | null)[];
 	decodedType?: string | null;
-	decodedText?: string | null;
-	rawHex?: string | null;
+	createdAt?: string;
 }
 
 interface TestRow {
@@ -49,7 +48,24 @@ interface TestRow {
 	status: TestStatus;
 	qr_payload: string;
 	outbound_seen_at: string | null;
+	outbound_endpoint_seen_at: string | null;
+	outbound_ack_seen_at: string | null;
+	reply_broadcast_at: string | null;
 	return_seen_at: string | null;
+	reply_ack_seen_at: string | null;
+	reply_endpoint_ack_at: string | null;
+	outbound_hash: string | null;
+	outbound_ack_hash: string | null;
+	outbound_ack_crc_hex: string | null;
+	return_hash: string | null;
+	reply_hash: string | null;
+	reply_ack_hash: string | null;
+	reply_ack_crc_hex: string | null;
+	outbound_hex: string | null;
+	outbound_ack_hex: string | null;
+	return_hex: string | null;
+	reply_hex: string | null;
+	reply_ack_hex: string | null;
 	reply_status: string | null;
 	created_at: string;
 	updated_at: string;
@@ -64,15 +80,10 @@ interface ObservationRow {
 	packet_hash: string;
 	observer_id: string | null;
 	observer_name: string | null;
-	first_seen: string | null;
-	rssi: number | null;
-	snr: number | null;
 	hop_count: number;
 	path_json: string;
-	resolved_path_json: string;
+	path_keys_json: string;
 	decoded_type: string | null;
-	decoded_text: string | null;
-	raw_hex: string | null;
 	created_at: string;
 }
 
@@ -85,7 +96,6 @@ interface NodeRow {
 	lon: number | null;
 	updated_at: string;
 	source: string;
-	raw_json: string | null;
 }
 
 export class HopbackDatabase {
@@ -134,11 +144,62 @@ export class HopbackDatabase {
 		return this.mapTest(row, this.listObservations(id));
 	}
 
-	listTestsForBrowser(browserId: string, limit = 30): DiagnosticTest[] {
+	listTestsForBrowser(browserId: string, limit = 30, offset = 0): DiagnosticTest[] {
 		const rows = this.db
-			.prepare('select * from tests where browser_id = ? order by created_at desc limit ?')
-			.all(browserId, limit) as TestRow[];
+			.prepare('select * from tests where browser_id = ? order by created_at desc limit ? offset ?')
+			.all(browserId, limit, offset) as TestRow[];
 		return rows.map((row) => this.mapTest(row, this.listObservations(row.id)));
+	}
+
+	getTestMetas(ids: string[]): DiagnosticTest[] {
+		if (!ids.length) return [];
+		const placeholders = ids.map(() => '?').join(',');
+		const rows = this.db
+			.prepare(
+				`select
+					t.id,
+					t.browser_id,
+					t.user_public_key,
+					t.endpoint_id,
+					t.endpoint_name,
+					t.endpoint_region,
+					t.endpoint_public_key,
+					t.code,
+					t.status,
+					t.outbound_seen_at,
+					t.outbound_endpoint_seen_at,
+					t.outbound_ack_seen_at,
+					t.reply_broadcast_at,
+					t.return_seen_at,
+					t.reply_ack_seen_at,
+					t.reply_endpoint_ack_at,
+					t.created_at,
+					t.updated_at,
+					t.expires_at,
+					count(o.id) as observation_count
+				from tests t
+				left join observations o on o.test_id = t.id
+				where t.id in (${placeholders})
+				group by t.id
+				order by t.created_at desc`
+			)
+			.all(...ids) as Array<TestRow & { observation_count: number }>;
+		return rows.map((row) =>
+			withDerivedStatus({
+				...this.mapTest(row, []),
+				observationCount: Number(row.observation_count) || 0
+			})
+		);
+	}
+
+	countTestsForBrowser(browserId: string) {
+		return Number(
+			(
+				this.db
+					.prepare('select count(*) as count from tests where browser_id = ?')
+					.get(browserId) as { count: number }
+			).count
+		);
 	}
 
 	listActiveTests(): DiagnosticTest[] {
@@ -147,46 +208,92 @@ export class HopbackDatabase {
 			.prepare(
 				`select * from tests
 				where expires_at > ?
-				and status not in ('completed', 'failed', 'expired')
 				order by created_at asc`
 			)
 			.all(now) as TestRow[];
 		return rows.map((row) => this.mapTest(row, this.listObservations(row.id)));
 	}
 
-	updateStatus(
+	updateTestFacts(
 		id: string,
-		status: TestStatus,
-		fields: { outboundSeenAt?: string; returnSeenAt?: string; replyStatus?: string | null } = {}
+		fields: {
+			outboundSeenAt?: string;
+			outboundEndpointSeenAt?: string;
+			outboundAckSeenAt?: string;
+			replyBroadcastAt?: string;
+			returnSeenAt?: string;
+			replyAckSeenAt?: string;
+			replyEndpointAckAt?: string;
+			outboundHash?: string | null;
+			outboundAckHash?: string | null;
+			outboundAckCrcHex?: string | null;
+			returnHash?: string | null;
+			replyHash?: string | null;
+			replyAckHash?: string | null;
+			replyAckCrcHex?: string | null;
+			outboundHex?: string | null;
+			outboundAckHex?: string | null;
+			returnHex?: string | null;
+			replyHex?: string | null;
+			replyAckHex?: string | null;
+			replyStatus?: string | null;
+		}
 	) {
-		const current = this.getTest(id);
-		if (!current) return null;
-
 		this.db
 			.prepare(
 				`update tests
-				set status = ?,
-					outbound_seen_at = coalesce(?, outbound_seen_at),
+				set outbound_seen_at = coalesce(?, outbound_seen_at),
+					outbound_endpoint_seen_at = coalesce(?, outbound_endpoint_seen_at),
+					outbound_ack_seen_at = coalesce(?, outbound_ack_seen_at),
+					reply_broadcast_at = coalesce(?, reply_broadcast_at),
 					return_seen_at = coalesce(?, return_seen_at),
+					reply_ack_seen_at = coalesce(?, reply_ack_seen_at),
+					reply_endpoint_ack_at = coalesce(?, reply_endpoint_ack_at),
+					outbound_hash = coalesce(?, outbound_hash),
+					outbound_ack_hash = coalesce(?, outbound_ack_hash),
+					outbound_ack_crc_hex = coalesce(?, outbound_ack_crc_hex),
+					return_hash = coalesce(?, return_hash),
+					reply_hash = coalesce(?, reply_hash),
+					reply_ack_hash = coalesce(?, reply_ack_hash),
+					reply_ack_crc_hex = coalesce(?, reply_ack_crc_hex),
+					outbound_hex = coalesce(?, outbound_hex),
+					outbound_ack_hex = coalesce(?, outbound_ack_hex),
+					return_hex = coalesce(?, return_hex),
+					reply_hex = coalesce(?, reply_hex),
+					reply_ack_hex = coalesce(?, reply_ack_hex),
 					reply_status = coalesce(?, reply_status),
 					updated_at = ?
 				where id = ?`
 			)
 			.run(
-				status,
 				fields.outboundSeenAt ?? null,
+				fields.outboundEndpointSeenAt ?? null,
+				fields.outboundAckSeenAt ?? null,
+				fields.replyBroadcastAt ?? null,
 				fields.returnSeenAt ?? null,
+				fields.replyAckSeenAt ?? null,
+				fields.replyEndpointAckAt ?? null,
+				fields.outboundHash ?? null,
+				fields.outboundAckHash ?? null,
+				fields.outboundAckCrcHex ?? null,
+				fields.returnHash ?? null,
+				fields.replyHash ?? null,
+				fields.replyAckHash ?? null,
+				fields.replyAckCrcHex ?? null,
+				fields.outboundHex ?? null,
+				fields.outboundAckHex ?? null,
+				fields.returnHex ?? null,
+				fields.replyHex ?? null,
+				fields.replyAckHex ?? null,
 				fields.replyStatus ?? null,
 				new Date().toISOString(),
 				id
 			);
-
-		return this.getTest(id);
 	}
 
 	addObservation(input: ObservationInput): PacketObservation | null {
 		const pathJson = JSON.stringify(input.path);
-		const resolvedPathJson = JSON.stringify(input.resolvedPath);
+		const pathKeysJson = JSON.stringify(input.pathKeys);
 		const existing = this.db
 			.prepare(
 				`select id from observations
@@ -210,9 +317,9 @@ export class HopbackDatabase {
 		const result = this.db
 			.prepare(
 				`insert into observations (
-					test_id, direction, source, packet_hash, observer_id, observer_name, first_seen, rssi, snr,
-					hop_count, path_json, resolved_path_json, decoded_type, decoded_text, raw_hex, created_at
-				) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+					test_id, direction, source, packet_hash, observer_id, observer_name,
+					hop_count, path_json, path_keys_json, decoded_type, created_at
+				) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 			)
 			.run(
 				input.testId,
@@ -221,16 +328,11 @@ export class HopbackDatabase {
 				input.packetHash,
 				input.observerId ?? null,
 				input.observerName ?? null,
-				input.firstSeen ?? null,
-				input.rssi ?? null,
-				input.snr ?? null,
 				input.hopCount,
 				pathJson,
-				resolvedPathJson,
+				pathKeysJson,
 				input.decodedType ?? null,
-				input.decodedText ?? null,
-				input.rawHex ?? null,
-				new Date().toISOString()
+				input.createdAt ?? new Date().toISOString()
 			);
 
 		return this.getObservation(Number(result.lastInsertRowid));
@@ -245,15 +347,15 @@ export class HopbackDatabase {
 
 	listObservations(testId: string): PacketObservation[] {
 		const rows = this.db
-			.prepare('select * from observations where test_id = ? order by created_at asc')
+			.prepare('select * from observations where test_id = ? order by created_at desc')
 			.all(testId) as ObservationRow[];
 		return rows.map((row) => this.mapObservation(row));
 	}
 
 	upsertNodes(nodes: NodeRecord[]) {
 		const statement = this.db.prepare(
-			`insert into nodes (public_key, name, short_hash, node_type, lat, lon, updated_at, source, raw_json)
-			values (@publicKey, @name, @shortHash, @nodeType, @lat, @lon, @updatedAt, @source, @rawJson)
+			`insert into nodes (public_key, name, short_hash, node_type, lat, lon, updated_at, source)
+			values (@publicKey, @name, @shortHash, @nodeType, @lat, @lon, @updatedAt, @source)
 			on conflict(public_key) do update set
 				name = excluded.name,
 				short_hash = excluded.short_hash,
@@ -261,27 +363,40 @@ export class HopbackDatabase {
 				lat = excluded.lat,
 				lon = excluded.lon,
 				updated_at = excluded.updated_at,
-				source = excluded.source,
-				raw_json = excluded.raw_json`
+				source = excluded.source`
 		);
 		const run = this.db.transaction((records: NodeRecord[]) => {
 			for (const node of records) {
-				statement.run({ ...node, rawJson: node.raw ? JSON.stringify(node.raw) : null });
+				statement.run({
+					publicKey: node.publicKey,
+					name: node.name,
+					shortHash: node.shortHash,
+					nodeType: node.nodeType ?? null,
+					lat: node.lat ?? null,
+					lon: node.lon ?? null,
+					updatedAt: node.updatedAt,
+					source: node.source
+				});
 			}
 		});
 		run(nodes);
 	}
 
-	listNodes(query = '', limit = 200): NodeRecord[] {
+	listNodes(query = '', limit = 200, updatedAfter?: string): NodeRecord[] {
 		const search = `%${query.toLowerCase()}%`;
+		const recentClause = updatedAfter ? 'and updated_at >= ?' : '';
+		const params = updatedAfter
+			? [search, search, search, updatedAfter, limit]
+			: [search, search, search, limit];
 		const rows = this.db
 			.prepare(
 				`select * from nodes
-				where lower(name) like ? or lower(public_key) like ? or lower(short_hash) like ?
-				order by name asc
+				where (lower(name) like ? or lower(public_key) like ? or lower(short_hash) like ?)
+				${recentClause}
+				order by updated_at desc, name asc
 				limit ?`
 			)
-			.all(search, search, search, limit) as NodeRow[];
+			.all(...params) as NodeRow[];
 		return rows.map((row) => this.mapNode(row));
 	}
 
@@ -319,16 +434,37 @@ export class HopbackDatabase {
 				status text not null,
 				qr_payload text not null,
 				outbound_seen_at text,
+				outbound_endpoint_seen_at text,
+				outbound_ack_seen_at text,
+				reply_broadcast_at text,
 				return_seen_at text,
+				reply_ack_seen_at text,
+				reply_endpoint_ack_at text,
+				outbound_hash text,
+				outbound_ack_hash text,
+				outbound_ack_crc_hex text,
+				return_hash text,
+				reply_hash text,
+				reply_ack_hash text,
+				reply_ack_crc_hex text,
+				outbound_hex text,
+				outbound_ack_hex text,
+				return_hex text,
+				reply_hex text,
+				reply_ack_hex text,
 				reply_status text,
 				created_at text not null,
 				updated_at text not null,
 				expires_at text not null
 			);
+		`);
 
-			create index if not exists tests_browser_idx on tests(browser_id, created_at desc);
-			create index if not exists tests_active_idx on tests(status, expires_at);
+		// Observations and nodes hold only derived/refreshable data, so when an
+		// older bloated schema is detected we simply rebuild the lean tables.
+		this.dropLegacyTable('observations', 'resolved_path_json');
+		this.dropLegacyTable('nodes', 'raw_json');
 
+		this.db.exec(`
 			create table if not exists observations (
 				id integer primary key autoincrement,
 				test_id text not null references tests(id) on delete cascade,
@@ -337,15 +473,10 @@ export class HopbackDatabase {
 				packet_hash text not null,
 				observer_id text,
 				observer_name text,
-				first_seen text,
-				rssi real,
-				snr real,
 				hop_count integer not null,
 				path_json text not null,
-				resolved_path_json text not null,
+				path_keys_json text not null default '[]',
 				decoded_type text,
-				decoded_text text,
-				raw_hex text,
 				created_at text not null
 			);
 
@@ -357,68 +488,26 @@ export class HopbackDatabase {
 				lat real,
 				lon real,
 				updated_at text not null,
-				source text not null,
-				raw_json text
+				source text not null
 			);
 
 			create index if not exists nodes_short_hash_idx on nodes(short_hash);
 			create index if not exists nodes_name_idx on nodes(name);
-		`);
-		this.migrateObservationsShape();
-		this.db.exec(`
 			create index if not exists observations_packet_observer_path_idx
-			on observations(test_id, packet_hash, direction, source, observer_id, path_json);
+				on observations(test_id, packet_hash, direction, source, observer_id, path_json);
 		`);
 	}
 
-	private migrateObservationsShape() {
-		const columns = this.db.pragma('table_info(observations)') as Array<{ name: string }>;
-		const hasObserverId = columns.some((column) => column.name === 'observer_id');
-		const indexes = this.db.pragma('index_list(observations)') as Array<{ name: string }>;
-		const hasOldAutoUnique = indexes.some((index) => index.name.startsWith('sqlite_autoindex'));
-		if (hasObserverId && !hasOldAutoUnique) return;
-
-		this.db.exec(`
-			alter table observations rename to observations_old;
-
-			create table observations (
-				id integer primary key autoincrement,
-				test_id text not null references tests(id) on delete cascade,
-				direction text not null,
-				source text not null,
-				packet_hash text not null,
-				observer_id text,
-				observer_name text,
-				first_seen text,
-				rssi real,
-				snr real,
-				hop_count integer not null,
-				path_json text not null,
-				resolved_path_json text not null,
-				decoded_type text,
-				decoded_text text,
-				raw_hex text,
-				created_at text not null
-			);
-
-			insert into observations (
-				id, test_id, direction, source, packet_hash, observer_id, observer_name, first_seen,
-				rssi, snr, hop_count, path_json, resolved_path_json, decoded_type, decoded_text,
-				raw_hex, created_at
-			)
-			select
-				id, test_id, direction, source, packet_hash,
-				${hasObserverId ? 'observer_id' : 'null'},
-				observer_name, first_seen, rssi, snr, hop_count, path_json, resolved_path_json,
-				decoded_type, decoded_text, raw_hex, created_at
-			from observations_old;
-
-			drop table observations_old;
-		`);
+	/** Drops a table when it still carries a column from the legacy bloated schema. */
+	private dropLegacyTable(table: string, legacyColumn: string) {
+		const columns = this.db.pragma(`table_info(${table})`) as Array<{ name: string }>;
+		if (columns.some((column) => column.name === legacyColumn)) {
+			this.db.exec(`drop table ${table}`);
+		}
 	}
 
 	private mapTest(row: TestRow, observations: PacketObservation[]): DiagnosticTest {
-		return {
+		return withDerivedStatus({
 			id: row.id,
 			browserId: row.browser_id,
 			userPublicKey: row.user_public_key,
@@ -430,34 +519,49 @@ export class HopbackDatabase {
 			status: row.status,
 			qrPayload: row.qr_payload,
 			outboundSeenAt: row.outbound_seen_at,
+			outboundEndpointSeenAt: row.outbound_endpoint_seen_at,
+			outboundAckSeenAt: row.outbound_ack_seen_at,
+			replyBroadcastAt: row.reply_broadcast_at,
 			returnSeenAt: row.return_seen_at,
+			replyAckSeenAt: row.reply_ack_seen_at,
+			replyEndpointAckAt: row.reply_endpoint_ack_at,
+			outboundHash: row.outbound_hash,
+			outboundAckHash: row.outbound_ack_hash,
+			outboundAckCrcHex: row.outbound_ack_crc_hex,
+			returnHash: row.return_hash,
+			replyHash: row.reply_hash,
+			replyAckHash: row.reply_ack_hash,
+			replyAckCrcHex: row.reply_ack_crc_hex,
+			outboundHex: row.outbound_hex,
+			outboundAckHex: row.outbound_ack_hex,
+			returnHex: row.return_hex,
+			replyHex: row.reply_hex,
+			replyAckHex: row.reply_ack_hex,
 			replyStatus: row.reply_status,
 			createdAt: row.created_at,
 			updatedAt: row.updated_at,
 			expiresAt: row.expires_at,
-			observations
-		};
+			observations,
+			nodes: {}
+		});
 	}
 
+	/**
+	 * Returns the stored observation facts. Node names, coordinates, distance and
+	 * the shared node map are resolved later by the runtime (see decorateTest).
+	 */
 	private mapObservation(row: ObservationRow): PacketObservation {
 		return {
 			id: row.id,
-			testId: row.test_id,
 			direction: row.direction,
 			source: row.source,
 			packetHash: row.packet_hash,
 			observerId: row.observer_id,
 			observerName: row.observer_name,
-			observerNode: row.observer_id ? this.findNodeByPublicKey(row.observer_id) : null,
-			firstSeen: row.first_seen,
-			rssi: row.rssi,
-			snr: row.snr,
 			hopCount: row.hop_count,
-			path: JSON.parse(row.path_json),
-			resolvedPath: JSON.parse(row.resolved_path_json),
+			path: JSON.parse(row.path_json) as string[],
+			pathKeys: JSON.parse(row.path_keys_json) as (string | null)[],
 			decodedType: row.decoded_type,
-			decodedText: row.decoded_text,
-			rawHex: row.raw_hex,
 			createdAt: row.created_at
 		};
 	}
@@ -471,8 +575,7 @@ export class HopbackDatabase {
 			lat: row.lat,
 			lon: row.lon,
 			updatedAt: row.updated_at,
-			source: row.source,
-			raw: row.raw_json ? JSON.parse(row.raw_json) : undefined
+			source: row.source
 		};
 	}
 }

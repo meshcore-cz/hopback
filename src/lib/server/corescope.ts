@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import { packetContentHash } from './mesh';
 
 export interface AnalyzerState {
 	url: string;
@@ -55,8 +56,9 @@ export class CoreScopeMonitor {
 				...(this.states.get(url) || { url, state: 'open' }),
 				lastMessageAt: new Date().toISOString()
 			});
-			const packet = normalizePacket(url, message.toString());
-			if (packet) this.onPacket(packet);
+			void normalizePacket(url, message.toString()).then((packet) => {
+				if (packet) this.onPacket(packet);
+			});
 		});
 
 		socket.on('error', (error) => {
@@ -75,7 +77,7 @@ export class CoreScopeMonitor {
 	}
 }
 
-function normalizePacket(source: string, text: string): CoreScopePacket | null {
+async function normalizePacket(source: string, text: string): Promise<CoreScopePacket | null> {
 	try {
 		const message = JSON.parse(text) as Record<string, unknown>;
 		if (message.type !== 'packet') return null;
@@ -90,10 +92,12 @@ function normalizePacket(source: string, text: string): CoreScopePacket | null {
 		const decoded = data.decoded as Record<string, unknown> | undefined;
 		const header = decoded?.header as Record<string, unknown> | undefined;
 
+		const analyzerHash = stringField(packet, 'hash');
+		const computedHash = await packetContentHash(rawHex);
 		return {
 			source,
 			rawHex,
-			hash: stringField(packet, 'hash') || rawHex.slice(0, 16),
+			hash: analyzerHash || computedHash || rawHex.slice(0, 16),
 			observerId: stringField(packet, 'observer_id', 'observerId'),
 			observerName: stringField(packet, 'observer_name', 'observerName'),
 			firstSeen: stringField(packet, 'first_seen', 'timestamp', 'created_at'),
@@ -104,7 +108,8 @@ function normalizePacket(source: string, text: string): CoreScopePacket | null {
 			payloadType: stringField(header, 'payloadTypeName'),
 			original: data
 		};
-	} catch {
+	} catch (error) {
+		console.error('Error normalizing packet:', error);
 		return null;
 	}
 }

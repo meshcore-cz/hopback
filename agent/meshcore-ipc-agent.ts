@@ -52,10 +52,11 @@ function connectBackend() {
 		const payload = JSON.parse(message.toString()) as {
 			type?: string;
 			testId?: string;
+			packetRole?: string;
 			rawHex?: string;
 		};
 		if (payload.type === 'sendRaw' && payload.rawHex) {
-			sendRaw(payload.rawHex, payload.testId);
+			sendRaw(payload.rawHex, payload.testId, payload.packetRole);
 		}
 	});
 
@@ -159,10 +160,17 @@ function handleIpcLine(line: string, socket: net.Socket) {
 	}
 }
 
-function sendRaw(rawHex: string, testId?: string) {
+function sendRaw(rawHex: string, testId?: string, packetRole?: string) {
 	if (!isIpcReady()) {
 		backend?.send(
-			JSON.stringify({ type: 'sendRawResult', testId, ok: false, error: 'IPC is not connected' })
+			JSON.stringify({
+				type: 'sendRawResult',
+				testId,
+				packetRole,
+				rawHex,
+				ok: false,
+				error: 'IPC is not connected'
+			})
 		);
 		return;
 	}
@@ -173,6 +181,8 @@ function sendRaw(rawHex: string, testId?: string) {
 				JSON.stringify({
 					type: 'sendRawResult',
 					testId,
+					packetRole,
+					rawHex,
 					ok: response.ok,
 					error: response.error
 				})
@@ -183,6 +193,8 @@ function sendRaw(rawHex: string, testId?: string) {
 				JSON.stringify({
 					type: 'sendRawResult',
 					testId,
+					packetRole,
+					rawHex,
 					ok: false,
 					error: error instanceof Error ? error.message : String(error)
 				})

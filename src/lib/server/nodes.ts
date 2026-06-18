@@ -1,5 +1,6 @@
 import type { NodeRecord } from '../types';
 import type { HopbackDatabase } from './db';
+import { fetchJsonWithRetry } from './http';
 
 export class NodeDirectory {
 	constructor(
@@ -16,9 +17,7 @@ export class NodeDirectory {
 	async refreshAll() {
 		for (const url of this.nodeApiUrls) {
 			try {
-				const response = await fetch(url);
-				if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-				const payload = await response.json();
+				const payload = await fetchJsonWithRetry(url, { label: 'nodes', verbose: this.verbose });
 				const nodes = normalizeNodes(payload, url);
 				this.db.upsertNodes(nodes);
 				if (this.verbose) console.log(`[nodes] loaded ${nodes.length} nodes from ${url}`);
@@ -28,9 +27,9 @@ export class NodeDirectory {
 		}
 	}
 
-	resolvePath(path: string[], resolvedPath?: string[]): NodeRecord[] {
+	resolvePath(path: string[], resolvedPath?: (string | null | undefined)[]): NodeRecord[] {
 		return path.map((hash, index) => {
-			const publicKey = resolvedPath?.[index];
+			const publicKey = resolvedPath?.[index] ?? undefined;
 			const byKey = publicKey ? this.db.listNodes(publicKey, 1)[0] : undefined;
 			const byHash = this.db.findNodeByHash(hash);
 			return (
@@ -82,8 +81,7 @@ function normalizeNode(row: unknown, source: string, now: string): NodeRecord | 
 		lat: numberField(record, 'lat', 'latitude'),
 		lon: numberField(record, 'lon', 'lng', 'longitude'),
 		updatedAt: stringField(record, 'updated_at', 'last_seen', 'timestamp') || now,
-		source,
-		raw: row
+		source
 	};
 }
 

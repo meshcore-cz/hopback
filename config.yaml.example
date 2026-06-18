@@ -25,6 +25,8 @@ endpoints:
     # Contact type: 1 Companion, 2 Repeater, 3 Room Server, 4 Sensor.
     type: 1
     # Required for central backend decryption/replies. Omit if the endpoint agent verifies locally.
+    # Use either the original identity seed (64 hex) or a MeshCore Companion expanded key
+    # (128 hex). Do not pass a 128-hex expanded key to identity-seed encoders.
     # privateKey: 128hex-private-key
     # agentId: kololec-agent
     location:
