@@ -1,5 +1,4 @@
 import WebSocket from 'ws';
-import { packetContentHash } from './mesh';
 
 export interface AnalyzerState {
 	url: string;
@@ -11,7 +10,7 @@ export interface AnalyzerState {
 export interface CoreScopePacket {
 	source: string;
 	rawHex: string;
-	hash: string;
+	hash?: string | null;
 	observerId?: string | null;
 	observerName?: string | null;
 	firstSeen?: string | null;
@@ -92,12 +91,10 @@ async function normalizePacket(source: string, text: string): Promise<CoreScopeP
 		const decoded = data.decoded as Record<string, unknown> | undefined;
 		const header = decoded?.header as Record<string, unknown> | undefined;
 
-		const analyzerHash = stringField(packet, 'hash');
-		const computedHash = await packetContentHash(rawHex);
 		return {
 			source,
 			rawHex,
-			hash: analyzerHash || computedHash || rawHex.slice(0, 16),
+			hash: stringField(packet, 'hash'),
 			observerId: stringField(packet, 'observer_id', 'observerId'),
 			observerName: stringField(packet, 'observer_name', 'observerName'),
 			firstSeen: stringField(packet, 'first_seen', 'timestamp', 'created_at'),

@@ -412,7 +412,10 @@ export class HopbackRuntime {
 			const score = this.pathSortScore(observation);
 			const winnerScore = this.pathSortScore(winner);
 			if (score < winnerScore) return observation;
-			if (score === winnerScore && new Date(observation.createdAt).getTime() < new Date(winner.createdAt).getTime()) {
+			if (
+				score === winnerScore &&
+				new Date(observation.createdAt).getTime() < new Date(winner.createdAt).getTime()
+			) {
 				return observation;
 			}
 			return winner;
@@ -700,7 +703,8 @@ export class HopbackRuntime {
 	private async handleCoreScopePacket(packet: CoreScopePacket) {
 		const lowerRaw = packet.rawHex.toLowerCase();
 		const pending =
-			this.pendingPacketsByHash.get(packet.hash) || this.pendingPacketsByRaw.get(lowerRaw);
+			(packet.hash ? this.pendingPacketsByHash.get(packet.hash) : undefined) ||
+			this.pendingPacketsByRaw.get(lowerRaw);
 		if (pending) {
 			await this.recordPacket(
 				packet,
@@ -711,10 +715,10 @@ export class HopbackRuntime {
 			return;
 		}
 
-		const match = await identifyPacket(
-			packet.rawHex,
-			[...this.activeTests.values()].map((active) => active.test)
-		);
+		const activeTests = [...this.activeTests.values()].map((active) => active.test);
+		if (!activeTests.length) return;
+
+		const match = await identifyPacket(packet.rawHex, activeTests);
 		if (!match) return;
 
 		if (this.config.verbose) {
@@ -754,7 +758,8 @@ export class HopbackRuntime {
 		text?: string | null
 	) {
 		if (!test) return null;
-		const active = this.registerActiveTest(test, packet.hash);
+		const packetHash = await this.packetHash(packet);
+		const active = this.registerActiveTest(test, packetHash);
 		const envelope = await decodeEnvelope(packet.rawHex);
 		const path = packet.path.length ? packet.path : (envelope?.hops ?? []);
 		// Capture-time resolution hints: the publicKey per hop, used to re-resolve
@@ -766,7 +771,7 @@ export class HopbackRuntime {
 			id: this.nextObservationId--,
 			direction,
 			source: packet.source,
-			packetHash: packet.hash,
+			packetHash,
 			observerId: packet.observerId,
 			observerName: packet.observerName,
 			hopCount: path.length || envelope?.hopCount || 0,
@@ -803,6 +808,13 @@ export class HopbackRuntime {
 
 		this.publishObservation(active.test, observation);
 		return { test: active.test, observation };
+	}
+
+	private async packetHash(packet: CoreScopePacket) {
+		if (packet.hash) return packet.hash;
+		const hash = await packetContentHash(packet.rawHex);
+		packet.hash = hash ?? packet.rawHex.slice(0, 16);
+		return packet.hash;
 	}
 
 	private applyObservationMilestones(
@@ -1042,11 +1054,10 @@ export class HopbackRuntime {
 			}
 
 			if (message.type === 'observedPacket') {
-				const hash = await packetContentHash(message.rawHex);
 				await this.handleCoreScopePacket({
 					source: `agent:${agent.id}`,
 					rawHex: message.rawHex,
-					hash: hash ?? message.rawHex.slice(0, 16),
+					hash: null,
 					path: [],
 					firstSeen: message.timestamp,
 					rssi: message.rssi,
