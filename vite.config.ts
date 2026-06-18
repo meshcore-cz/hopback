@@ -2,14 +2,14 @@ import tailwindcss from '@tailwindcss/vite';
 import type { Server } from 'node:http';
 import { defineConfig } from 'vitest/config';
 import { sveltekit } from '@sveltejs/kit/vite';
-import { attachHopbackGateway } from './src/lib/server/runtime';
 
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
 		{
 			name: 'hopback-ws',
-			configureServer(server) {
+			async configureServer(server) {
+				const { attachHopbackGateway } = await import('./src/lib/server/runtime');
 				if (server.httpServer) attachHopbackGateway(server.httpServer as Server);
 			}
 		},
