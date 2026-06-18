@@ -117,6 +117,9 @@
 		) ?? []
 	);
 	let hasObserved = $derived(Boolean(test?.observations.length));
+	let expiredWithoutPackets = $derived(
+		Boolean(test && test.status === 'expired' && test.observations.length === 0)
+	);
 	let mapKinds = $derived(
 		test?.propagationMap
 			? [...new Set(test.propagationMap.segments.map((segment) => segment.kind))].filter(
@@ -194,7 +197,6 @@
 			return;
 		}
 		test = payload.test;
-		rememberTestId(payload.test.id);
 	}
 
 	// Starts a fresh test for the same endpoint + user key, then loads it. A full
@@ -222,21 +224,6 @@
 		} catch {
 			error = t('detail.repeat.error');
 			repeating = false;
-		}
-	}
-
-	function rememberTestId(id: string) {
-		try {
-			const stored = localStorage.getItem('hopback.testIds');
-			const ids = stored ? (JSON.parse(stored) as string[]) : [];
-			if (!Array.isArray(ids)) {
-				localStorage.setItem('hopback.testIds', JSON.stringify([id]));
-				return;
-			}
-			const next = [id, ...ids.filter((item) => item !== id)].slice(0, 200);
-			localStorage.setItem('hopback.testIds', JSON.stringify(next));
-		} catch {
-			// ignore storage errors
 		}
 	}
 
@@ -1026,30 +1013,31 @@
 </svelte:head>
 
 <main class="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
-	<div class="flex items-center justify-between gap-2">
+	<div class="flex items-center justify-between gap-2 overflow-x-auto pb-1">
 		<a
-			class="inline-flex w-fit items-center gap-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-medium text-neutral-800 hover:bg-neutral-100"
+			class="inline-flex h-10 shrink-0 items-center gap-2 rounded-md border border-neutral-300 bg-white px-3 text-sm font-medium text-neutral-800 hover:bg-neutral-100"
 			href={resolve('/')}
 		>
 			<ArrowLeft size={16} />
 			{t('common.back')}
 		</a>
 
-		<div class="flex items-center gap-2">
+		<div class="flex shrink-0 items-center gap-2">
 			{#if test && (test.status === 'completed' || test.status === 'failed' || test.status === 'expired')}
 				<button
 					type="button"
 					onclick={repeatTest}
 					disabled={repeating}
-					class="inline-flex w-fit items-center gap-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-medium text-teal-700 transition hover:border-teal-300 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60"
+					class="inline-flex size-10 shrink-0 items-center justify-center gap-2 rounded-md border border-neutral-300 bg-white text-sm font-medium text-teal-700 transition hover:border-teal-300 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:px-3"
 					title={t('detail.repeat.hint')}
+					aria-label={t('detail.repeat.button')}
 				>
 					{#if repeating}
 						<LoaderCircle size={16} class="animate-spin" />
 					{:else}
 						<RotateCw size={16} />
 					{/if}
-					{t('detail.repeat.button')}
+					<span class="hidden sm:inline">{t('detail.repeat.button')}</span>
 				</button>
 			{/if}
 			<LanguageSwitcher />
@@ -1178,181 +1166,201 @@
 			</div>
 		</header>
 
-		{#if endpointAgentWarning(test)}
-			<section class="rounded-md border border-red-200 bg-red-50 p-4 text-red-800 shadow-sm">
-				<div class="flex gap-3">
-					<AlertCircle size={22} class="mt-0.5 shrink-0" />
-					<div>
-						<h2 class="font-semibold">{t('detail.agent.title')}</h2>
-						<p class="mt-1 text-sm text-red-700">{endpointAgentWarning(test)}</p>
+		{#if expiredWithoutPackets}
+			{@render ExpiredWithoutPacketsPanel()}
+		{:else}
+			{#if endpointAgentWarning(test)}
+				<section class="rounded-md border border-red-200 bg-red-50 p-4 text-red-800 shadow-sm">
+					<div class="flex gap-3">
+						<AlertCircle size={22} class="mt-0.5 shrink-0" />
+						<div>
+							<h2 class="font-semibold">{t('detail.agent.title')}</h2>
+							<p class="mt-1 text-sm text-red-700">{endpointAgentWarning(test)}</p>
+						</div>
 					</div>
+				</section>
+			{/if}
+
+			{@render ProgressPanel(test)}
+
+			{#if hasObserved && mapFullWidth}
+				{@render MapPanel(true)}
+			{/if}
+
+			<section class="grid min-w-0 gap-5 lg:grid-cols-[360px_minmax(0,1fr)] lg:items-start">
+				<aside class="grid min-w-0 content-start gap-4">
+					{#if hasObserved && !mapFullWidth}
+						{@render MapPanel(false)}
+					{:else if !hasObserved}
+						{@render InstructionsPanel(test)}
+					{/if}
+					{@render DeliveryPathsPanel(test)}
+					{@render PathStatisticsPanel(test)}
+				</aside>
+
+				<div class="grid min-w-0 gap-5">
+					<section class="grid min-w-0 gap-4 md:grid-cols-2">
+						{@render RoutePanel(t('route.userToEndpoint'), 'send', outbound)}
+						{@render RoutePanel(t('route.endpointToUser'), 'return', returned)}
+					</section>
+
+					<section class="min-w-0 rounded-md border border-neutral-300 bg-white p-4 shadow-sm">
+						<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+							<div class="flex items-center gap-2">
+								<Clock size={18} class="text-amber-700" />
+								<h2 class="text-lg font-semibold text-neutral-950">{t('obs.title')}</h2>
+							</div>
+							<p class="text-sm text-neutral-500">
+								{t('obs.summary', {
+									shown: filteredObservations.length,
+									total: test.observations.length,
+									observers: uniqueObserverCount(filteredObservations),
+									paths: uniquePathCount(filteredObservations)
+								})}
+							</p>
+						</div>
+						<div class="mb-3 flex flex-wrap gap-2 text-xs">
+							<button
+								class={`rounded px-2 py-1 font-semibold transition ${selectedKinds.length === 0 ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'}`}
+								type="button"
+								onclick={clearKindFilter}
+							>
+								{t('obs.filter.all')}
+							</button>
+							{#each packetKindOptions() as kind (kind)}
+								<button
+									class={`rounded px-2 py-1 font-semibold transition ${kindFilterClass(kind)}`}
+									type="button"
+									onclick={() => toggleKind(kind)}
+								>
+									{kindLabel(kind)}
+								</button>
+							{/each}
+						</div>
+						<div class="max-w-full overflow-x-auto">
+							<table class="min-w-[680px] text-left text-xs sm:w-full sm:min-w-0">
+								<thead class="border-b border-neutral-200 text-neutral-500">
+									<tr>
+										<th class="py-2 pr-2 font-semibold">{t('obs.col.time')}</th>
+										<th class="px-2 py-2 font-semibold">{t('obs.col.kind')}</th>
+										<th class="px-2 py-2 font-semibold">{t('obs.col.observer')}</th>
+										<th class="px-2 py-2 font-semibold">{t('obs.col.hops')}</th>
+										<th class="px-2 py-2 font-semibold">{t('obs.col.distance')}</th>
+										<th class="px-2 py-2 font-semibold">{t('obs.col.path')}</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-neutral-100">
+									{#each [...filteredObservations] as observation (observation.id)}
+										{@const firstSeen = firstObservationTime(test.observations)}
+										{@const endpointObservation = isEndpointObservation(observation, test)}
+										<tr
+											class={endpointObservation
+												? 'bg-teal-50/75 cursor-pointer text-neutral-950'
+												: 'cursor-pointer text-neutral-700 hover:bg-neutral-50'}
+											onclick={(event) => {
+												event.preventDefault();
+												openObservationOnAnalyzer(observation);
+											}}
+										>
+											<td class="mono py-2 pr-2 text-neutral-500">
+												{relativeTime(
+													observation.createdAt,
+													new Date(firstSeen ?? test.createdAt).toISOString()
+												)}
+											</td>
+											<td class="px-2 py-2">
+												<span
+													class={`inline-flex items-center rounded px-1.5 py-0.5 font-semibold ${packetKindClass(observation)}`}
+												>
+													{kindLabel(packetKindLabel(observation))}
+												</span>
+											</td>
+											<td class="px-2 py-2">
+												<p class="max-w-32 truncate font-medium text-sm">
+													{observerLabel(observation)}
+												</p>
+												{#if observation.observerId}
+													<p class="mono max-w-32 truncate text-[10px] text-neutral-500">
+														{observation.observerId}
+													</p>
+												{/if}
+											</td>
+											<td class="px-2 py-2">{observation.hopCount}</td>
+											<td class="px-2 py-2 font-medium text-neutral-600">
+												{formatDistance(observation.distanceKm)}
+											</td>
+											<td class="max-w-64 overflow-x-auto px-2 py-2 sm:max-w-80">
+												<div class="flex flex-wrap items-center gap-1">
+													{#each compactPath(observation) as hop, index (`${hop.publicKey || hop.shortHash}:${index}`)}
+														{#if index > 0}
+															<span class="text-[10px] text-neutral-400">→</span>
+														{/if}
+														{#if hop.publicKey}
+															<button
+																type="button"
+																class={`mono rounded px-1.5 py-0.5 text-[10px] transition-colors ${hop.hasCoords ? 'bg-neutral-100 text-neutral-600 hover:bg-teal-100 hover:text-teal-800' : 'bg-orange-100 text-orange-700 hover:bg-orange-200'}`}
+																onclick={(event) => {
+																	event.stopPropagation();
+																	if (hop.publicKey)
+																		window.open(
+																			analyzerNodeUrl(hop.publicKey),
+																			'_blank',
+																			'noreferrer'
+																		);
+																}}>{hop.name}</button
+															>
+														{:else}
+															<span
+																class={`mono rounded px-1.5 py-0.5 text-[10px] ${hop.hasCoords ? 'bg-neutral-100 text-neutral-600' : 'bg-orange-100 text-orange-700'}`}
+																>{hop.name}</span
+															>
+														{/if}
+													{/each}
+												</div>
+											</td>
+										</tr>
+									{:else}
+										<tr>
+											<td colspan="6" class="py-5 text-center text-sm text-neutral-500">
+												{t('obs.waiting')}
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					</section>
 				</div>
 			</section>
+
+			<section class="grid gap-3 md:grid-cols-4">
+				{@render Metric(t('metric.outboundHops'), bestHopCount(outbound))}
+				{@render Metric(t('metric.returnHops'), bestHopCount(returned))}
+				{@render Metric(t('metric.reply'), test.replyStatus || t('common.pending'))}
+				{@render Metric(
+					t('metric.expires'),
+					new Date(test.expiresAt).toLocaleTimeString(localeTag())
+				)}
+			</section>
 		{/if}
-
-		{@render ProgressPanel(test)}
-
-		{#if hasObserved && mapFullWidth}
-			{@render MapPanel(true)}
-		{/if}
-
-		<section class="grid gap-5 lg:grid-cols-[360px_minmax(0,1fr)] lg:items-start">
-			<aside class="grid content-start gap-4">
-				{#if hasObserved && !mapFullWidth}
-					{@render MapPanel(false)}
-				{:else if !hasObserved}
-					{@render InstructionsPanel(test)}
-				{/if}
-				{@render DeliveryPathsPanel(test)}
-				{@render PathStatisticsPanel(test)}
-			</aside>
-
-			<div class="grid gap-5">
-				<section class="grid gap-4 md:grid-cols-2">
-					{@render RoutePanel(t('route.userToEndpoint'), 'send', outbound)}
-					{@render RoutePanel(t('route.endpointToUser'), 'return', returned)}
-				</section>
-
-				<section class="rounded-md border border-neutral-300 bg-white p-4 shadow-sm">
-					<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-						<div class="flex items-center gap-2">
-							<Clock size={18} class="text-amber-700" />
-							<h2 class="text-lg font-semibold text-neutral-950">{t('obs.title')}</h2>
-						</div>
-						<p class="text-sm text-neutral-500">
-							{t('obs.summary', {
-								shown: filteredObservations.length,
-								total: test.observations.length,
-								observers: uniqueObserverCount(filteredObservations),
-								paths: uniquePathCount(filteredObservations)
-							})}
-						</p>
-					</div>
-					<div class="mb-3 flex flex-wrap gap-2 text-xs">
-						<button
-							class={`rounded px-2 py-1 font-semibold transition ${selectedKinds.length === 0 ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'}`}
-							type="button"
-							onclick={clearKindFilter}
-						>
-							{t('obs.filter.all')}
-						</button>
-						{#each packetKindOptions() as kind (kind)}
-							<button
-								class={`rounded px-2 py-1 font-semibold transition ${kindFilterClass(kind)}`}
-								type="button"
-								onclick={() => toggleKind(kind)}
-							>
-								{kindLabel(kind)}
-							</button>
-						{/each}
-					</div>
-					<div class="overflow-x-auto">
-						<table class="w-full text-left text-xs">
-							<thead class="border-b border-neutral-200 text-neutral-500">
-								<tr>
-									<th class="py-2 pr-2 font-semibold">{t('obs.col.time')}</th>
-									<th class="px-2 py-2 font-semibold">{t('obs.col.kind')}</th>
-									<th class="px-2 py-2 font-semibold">{t('obs.col.observer')}</th>
-									<th class="px-2 py-2 font-semibold">{t('obs.col.hops')}</th>
-									<th class="px-2 py-2 font-semibold">{t('obs.col.distance')}</th>
-									<th class="px-2 py-2 font-semibold">{t('obs.col.path')}</th>
-								</tr>
-							</thead>
-							<tbody class="divide-y divide-neutral-100">
-								{#each [...filteredObservations] as observation (observation.id)}
-									{@const firstSeen = firstObservationTime(test.observations)}
-									{@const endpointObservation = isEndpointObservation(observation, test)}
-									<tr
-										class={endpointObservation
-											? 'bg-teal-50/75 cursor-pointer text-neutral-950'
-											: 'cursor-pointer text-neutral-700 hover:bg-neutral-50'}
-										onclick={(event) => {
-											event.preventDefault();
-											openObservationOnAnalyzer(observation);
-										}}
-									>
-										<td class="mono py-2 pr-2 text-neutral-500">
-											{relativeTime(
-												observation.createdAt,
-												new Date(firstSeen ?? test.createdAt).toISOString()
-											)}
-										</td>
-										<td class="px-2 py-2">
-											<span
-												class={`inline-flex items-center rounded px-1.5 py-0.5 font-semibold ${packetKindClass(observation)}`}
-											>
-												{kindLabel(packetKindLabel(observation))}
-											</span>
-										</td>
-										<td class="px-2 py-2">
-											<p class="max-w-32 truncate font-medium text-sm">
-												{observerLabel(observation)}
-											</p>
-											{#if observation.observerId}
-												<p class="mono max-w-32 truncate text-[10px] text-neutral-500">
-													{observation.observerId}
-												</p>
-											{/if}
-										</td>
-										<td class="px-2 py-2">{observation.hopCount}</td>
-										<td class="px-2 py-2 font-medium text-neutral-600">
-											{formatDistance(observation.distanceKm)}
-										</td>
-										<td class="max-w-80 overflow-x-scroll no-scrollbar px-2 py-2">
-											<div class="flex flex-wrap items-center gap-1">
-												{#each compactPath(observation) as hop, index (`${hop.publicKey || hop.shortHash}:${index}`)}
-													{#if index > 0}
-														<span class="text-[10px] text-neutral-400">→</span>
-													{/if}
-													{#if hop.publicKey}
-														<button
-															type="button"
-															class={`mono rounded px-1.5 py-0.5 text-[10px] transition-colors ${hop.hasCoords ? 'bg-neutral-100 text-neutral-600 hover:bg-teal-100 hover:text-teal-800' : 'bg-orange-100 text-orange-700 hover:bg-orange-200'}`}
-															onclick={(event) => {
-																event.stopPropagation();
-																if (hop.publicKey)
-																	window.open(
-																		analyzerNodeUrl(hop.publicKey),
-																		'_blank',
-																		'noreferrer'
-																	);
-															}}>{hop.name}</button
-														>
-													{:else}
-														<span
-															class={`mono rounded px-1.5 py-0.5 text-[10px] ${hop.hasCoords ? 'bg-neutral-100 text-neutral-600' : 'bg-orange-100 text-orange-700'}`}
-															>{hop.name}</span
-														>
-													{/if}
-												{/each}
-											</div>
-										</td>
-									</tr>
-								{:else}
-									<tr>
-										<td colspan="6" class="py-5 text-center text-sm text-neutral-500">
-											{t('obs.waiting')}
-										</td>
-									</tr>
-								{/each}
-							</tbody>
-						</table>
-					</div>
-				</section>
-			</div>
-		</section>
-
-		<section class="grid gap-3 md:grid-cols-4">
-			{@render Metric(t('metric.outboundHops'), bestHopCount(outbound))}
-			{@render Metric(t('metric.returnHops'), bestHopCount(returned))}
-			{@render Metric(t('metric.reply'), test.replyStatus || t('common.pending'))}
-			{@render Metric(
-				t('metric.expires'),
-				new Date(test.expiresAt).toLocaleTimeString(localeTag())
-			)}
-		</section>
 	{/if}
 </main>
+
+{#snippet ExpiredWithoutPacketsPanel()}
+	<section class="rounded-md border border-red-200 bg-red-50 p-6 text-red-900 shadow-sm">
+		<div class="flex flex-col gap-4 sm:flex-row sm:items-start">
+			<span class="grid size-12 shrink-0 place-items-center rounded-md bg-red-100 text-red-700">
+				<XCircle size={26} />
+			</span>
+			<div>
+				<h2 class="text-xl font-semibold">{t('detail.expiredEmpty.title')}</h2>
+				<p class="mt-2 max-w-2xl text-sm leading-6 text-red-800">
+					{t('detail.expiredEmpty.body')}
+				</p>
+			</div>
+		</div>
+	</section>
+{/snippet}
 
 {#snippet Metric(label: string, value: string)}
 	<div class="rounded-md border border-neutral-300 bg-white p-3 shadow-sm">
@@ -1819,7 +1827,9 @@
 						<Waypoints size={13} class="shrink-0" />
 						<p class="truncate text-xs">{t('route.paths')}</p>
 					</div>
-					<p class="mt-1 font-semibold tabular-nums text-neutral-900">{uniquePathCount(messages)}</p>
+					<p class="mt-1 font-semibold tabular-nums text-neutral-900">
+						{uniquePathCount(messages)}
+					</p>
 				</div>
 				<div class="rounded-md border border-neutral-200 bg-neutral-50/70 p-2.5">
 					<div class="flex min-w-0 items-center gap-1.5 text-neutral-400">

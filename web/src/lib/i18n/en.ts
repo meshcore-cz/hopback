@@ -108,6 +108,9 @@ export const en = {
 	'detail.repeat.button': 'Repeat test',
 	'detail.repeat.hint': 'Start a new test to the same endpoint with the same key',
 	'detail.repeat.error': 'Could not start a new test.',
+	'detail.expiredEmpty.title': 'This test expired without receiving packets',
+	'detail.expiredEmpty.body':
+		'Hopback did not see any matching MeshCore packets before this test expired, so there is no route, observation, or timing data to show.',
 
 	'detail.agent.title': 'Endpoint agent unavailable',
 	'detail.agent.connected':

@@ -3,6 +3,11 @@
 	import { locale, locales, setLocale, t } from './index.svelte';
 
 	let { compact = false }: { compact?: boolean } = $props();
+
+	function label(code: string) {
+		if (compact) return code.toUpperCase();
+		return code === 'cs' ? 'Čeština' : 'English';
+	}
 </script>
 
 <div
@@ -15,7 +20,7 @@
 	{/if}
 	{#each locales as code (code)}
 		<button
-			class={`rounded px-2 py-1 font-medium uppercase transition ${
+			class={`rounded px-2 py-1 font-medium transition ${
 				locale() === code
 					? 'bg-neutral-900 text-white'
 					: 'text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900'
@@ -25,7 +30,7 @@
 			title={t(`lang.${code}`)}
 			onclick={() => setLocale(code)}
 		>
-			{code}
+			{label(code)}
 		</button>
 	{/each}
 </div>

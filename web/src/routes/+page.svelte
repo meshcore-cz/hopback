@@ -13,7 +13,6 @@
 		MapPin,
 		Plus,
 		Radio,
-		RotateCw,
 		Search,
 		X
 	} from '@lucide/svelte';
@@ -239,7 +238,21 @@
 			return;
 		}
 
+		rememberStartedTest(payload.test.id);
 		await goto(resolve('/[id]', { id: payload.test.id }));
+	}
+
+	function rememberStartedTest(id: string) {
+		try {
+			const stored = localStorage.getItem('hopback.testIds');
+			const ids = stored ? (JSON.parse(stored) as string[]) : [];
+			const existing = Array.isArray(ids) ? ids : [];
+			const next = [id, ...existing.filter((item) => item !== id)].slice(0, 200);
+			localStorage.setItem('hopback.testIds', JSON.stringify(next));
+			ownTestIds = next;
+		} catch {
+			// ignore storage errors
+		}
 	}
 
 	function relativeTime(value?: string | null) {
@@ -297,21 +310,23 @@
 			<div class="flex justify-end">
 				<LanguageSwitcher />
 			</div>
-			<div class="grid grid-cols-4 gap-2 text-sm">
+			<div class="grid grid-cols-4 gap-2 text-sm max-[520px]:text-xs">
 				{#if status}
 					{#each statusStats as stat, index (stat.id)}
 						<div
-							class="rounded-md border border-neutral-300 bg-white/75 px-3 py-2"
+							class="min-w-0 rounded-md border border-neutral-300 bg-white/75 px-3 py-2 max-[520px]:px-2"
 							in:fly={{ y: 8, duration: 350, delay: index * 70, easing: cubicOut }}
 						>
-							<p class="text-neutral-500">{stat.label}</p>
+							<p class="break-words leading-tight text-neutral-500">{stat.label}</p>
 							<p class="font-semibold text-neutral-950">{stat.value}</p>
 						</div>
 					{/each}
 				{:else}
 					{#each statusStats as stat (stat.id)}
-						<div class="rounded-md border border-neutral-200 bg-white/75 px-3 py-2">
-							<p class="text-neutral-500">{stat.label}</p>
+						<div
+							class="min-w-0 rounded-md border border-neutral-200 bg-white/75 px-3 py-2 max-[520px]:px-2"
+						>
+							<p class="break-words leading-tight text-neutral-500">{stat.label}</p>
 							<div class="mt-1 h-4 w-8 animate-pulse rounded bg-neutral-200"></div>
 						</div>
 					{/each}
@@ -324,21 +339,13 @@
 		class="rounded-md border border-neutral-300 bg-white p-4 shadow-sm sm:p-5"
 		onsubmit={createTest}
 	>
-		<div class="mb-5 flex items-center justify-between gap-3">
+		<div class="mb-5">
 			<div>
 				<h2 class="text-xl font-semibold text-neutral-950">{t('home.newTest.title')}</h2>
 				<p class="text-sm text-neutral-500">
 					{t('home.newTest.subtitle')}
 				</p>
 			</div>
-			<button
-				class="inline-flex size-10 items-center justify-center rounded-md border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-100"
-				type="button"
-				onclick={refresh}
-				title={t('common.refresh')}
-			>
-				<RotateCw size={18} />
-			</button>
 		</div>
 
 		<div>
@@ -480,13 +487,13 @@
 					</div>
 				</div>
 			{/if}
-			<div class="mt-2 grid gap-2">
+			<div class="mt-2 grid min-w-0 gap-2">
 				{#each endpointOptions as endpoint, index (endpoint.id)}
 					{@const agent = endpointAgentStatus(endpoint.id)}
 					{@const disabled = Boolean(status && !agent?.ready)}
 					{@const online = endpointOnline(endpoint.id)}
 					<button
-						class={`rounded-md border px-3 py-3 text-left transition ${disabled ? 'cursor-not-allowed border-neutral-200 bg-neutral-100 opacity-65' : selectedEndpoint === endpoint.id ? 'border-teal-700 bg-teal-50 ring-4 ring-teal-600/10' : 'border-neutral-300 bg-neutral-50 hover:border-neutral-500'}`}
+						class={`w-full min-w-0 rounded-md border px-3 py-3 text-left transition ${disabled ? 'cursor-not-allowed border-neutral-200 bg-neutral-100 opacity-65' : selectedEndpoint === endpoint.id ? 'border-teal-700 bg-teal-50 ring-4 ring-teal-600/10' : 'border-neutral-300 bg-neutral-50 hover:border-neutral-500'}`}
 						type="button"
 						in:fly={{ y: 8, duration: 300, delay: index * 60, easing: cubicOut }}
 						{disabled}
@@ -494,11 +501,11 @@
 							if (!disabled) selectedEndpoint = endpoint.id;
 						}}
 					>
-						<span class="flex items-start justify-between gap-3">
-							<span class="min-w-0">
+						<span class="flex w-full min-w-0 items-start justify-between gap-3">
+							<span class="min-w-0 flex-1">
 								<span class="block truncate font-semibold text-neutral-950">{endpoint.name}</span>
-								<span class="mt-1 flex items-center gap-1 text-sm text-neutral-600">
-									<MapPin size={15} />
+								<span class="mt-1 flex min-w-0 items-center gap-1 text-sm text-neutral-600">
+									<MapPin size={15} class="shrink-0" />
 									<span class="truncate">{endpoint.location?.label || endpoint.region}</span>
 								</span>
 							</span>

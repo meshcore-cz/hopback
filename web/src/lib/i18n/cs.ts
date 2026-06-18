@@ -110,6 +110,9 @@ export const cs: Record<MessageKey | string, string> = {
 	'detail.repeat.button': 'Opakovat test',
 	'detail.repeat.hint': 'Spustit nový test na stejný koncový bod se stejným klíčem',
 	'detail.repeat.error': 'Nepodařilo se spustit nový test.',
+	'detail.expiredEmpty.title': 'Test vypršel bez přijatých paketů',
+	'detail.expiredEmpty.body':
+		'Hopback před vypršením testu nezachytil žádné odpovídající pakety MeshCore, takže není co zobrazit pro trasu, pozorování ani časování.',
 
 	'detail.agent.title': 'Agent koncového bodu nedostupný',
 	'detail.agent.connected':
