@@ -7,7 +7,13 @@ node_modules
 .wrangler
 /.svelte-kit
 /build
+/web/build
 /data
+/bin
+/hopback-agent
+/hopbackd
+/cmd/hopbackd/frontend/*
+!/cmd/hopbackd/frontend/placeholder.txt
 
 # OS
 .DS_Store

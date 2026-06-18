@@ -9,10 +9,11 @@ The service combines a simple web frontend, a central real-time backend, [CoreSc
 ## Stack
 
 - SvelteKit 2 / Svelte 5 frontend
-- Node adapter with a custom WebSocket gateway
-- SQLite via `better-sqlite3`
+- Static Svelte frontend embedded into the Go backend binary
+- Go HTTP/WebSocket backend
+- SQLite
 - CoreScope WebSocket real-time metrics and node information
-- Mesh packet matching through `@meshcore-cz/meshpkt`
+- Mesh packet matching through native `meshpkt`
 - Lightweight agent bridge for meshcore-go IPC
 
 ## Development
@@ -21,10 +22,11 @@ The service combines a simple web frontend, a central real-time backend, [CoreSc
 npm install
 cp config.yaml.example config.yaml
 cp .env.example .env
+npm run dev:server
 npm run dev
 ```
 
-Open `http://localhost:5173`. The dev server attaches Hopback WebSocket routes at:
+Open `http://localhost:5173`. In development, Vite serves the frontend and proxies runtime traffic to the Go backend at `http://127.0.0.1:3000`:
 
 - `/ws` for browsers
 - `/agent` for authenticated agents
@@ -34,11 +36,10 @@ The same flow is available through Make:
 ```sh
 make config
 make agent-env
-make meshpkt-use-local
-make stack-web
+make stack
 ```
 
-To run the web gateway and the lightweight IPC agent together:
+To run the backend, frontend, and lightweight IPC agent together:
 
 ```sh
 make stack
@@ -46,10 +47,10 @@ make stack
 
 Useful targets:
 
-- `make dev` starts the SvelteKit gateway.
-- `make agent` starts the meshcore-go IPC agent.
+- `npm run dev:server` starts the Go backend.
+- `make dev` starts the Vite frontend.
+- `make agent` starts the Go meshcore-go IPC agent.
 - `make verify` runs format, type checks, lint, tests, and production build.
-- `make meshpkt-use-local` rebuilds and installs `../meshpkt/js`.
 
 ## Production
 
@@ -58,7 +59,42 @@ npm run build
 npm run start
 ```
 
-`npm run start` launches `server/index.ts`, mounts the SvelteKit build, and attaches the same WebSocket gateway.
+`npm run build` writes the static Svelte frontend into `cmd/hopbackd/frontend/`, builds `bin/hopbackd` with those assets embedded, and builds `bin/hopback-agent`. `npm run start` launches the single Go web process, which serves the UI, `/api/*`, `/ws`, and `/agent`.
+
+### Server Install With Go
+
+From a checkout, build the frontend once before installing `hopbackd` so the UI is embedded into the Go binary:
+
+```sh
+npm ci
+npm run build:frontend:embed
+go install ./cmd/hopbackd
+go install ./cmd/hopback-agent
+```
+
+Then run `hopbackd` from the directory containing `config.yaml`:
+
+```sh
+HOST=0.0.0.0 PORT=3000 hopbackd
+```
+
+For an agent-only machine, no frontend build is needed:
+
+```sh
+go install github.com/meshcore-cz/hopback/cmd/hopback-agent@latest
+```
+
+For a frontend-only static build, such as GitHub Pages:
+
+```sh
+PUBLIC_HOPBACK_API_URL=https://hopback.pp0.co npm run build:frontend
+```
+
+The Pages workflow in `.github/workflows/pages.yml` publishes `build/`. Set these repository variables as needed:
+
+- `PUBLIC_HOPBACK_API_URL` for the Go backend HTTP origin, for example `https://hopback.pp0.co`
+- `PUBLIC_HOPBACK_WS_URL` only if WebSockets use a different origin, for example `wss://hopback.pp0.co`
+- `PUBLIC_BASE_PATH` for project Pages, for example `/hopback`; leave empty for a custom domain or root Pages site
 
 ## Backend And Web Configuration
 
@@ -100,7 +136,7 @@ Hopback fails at startup when required backend/web configuration is missing or m
 The included agent is a JSON-lines bridge between Hopback and meshcore-go IPC. Agent settings live in `.env`:
 
 ```env
-HOPBACK_BACKEND_WS=ws://127.0.0.1:5173/agent
+HOPBACK_BACKEND_WS=ws://127.0.0.1:3000/agent
 HOPBACK_AGENT_SECRET=change-this-secret
 HOPBACK_ENDPOINT_ID=kololec
 HOPBACK_AGENT_ID=kololec-agent
@@ -113,6 +149,8 @@ Run the agent with:
 ```sh
 npm run agent
 ```
+
+After `npm run build`, the compiled agent is available at `bin/hopback-agent`.
 
 `HOPBACK_AGENT_SECRET` must match `service.agentSecret` from the backend/web `config.yaml`.
 

@@ -1,4 +1,7 @@
-import adapter from '@sveltejs/adapter-node';
+import adapter from '@sveltejs/adapter-static';
+
+const base = process.env.PUBLIC_BASE_PATH || '';
+const output = process.env.SVELTEKIT_OUTPUT_DIR || 'build';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
@@ -7,7 +10,21 @@ const config = {
 		runes: ({ filename }) => (filename.split(/[/\\]/).includes('node_modules') ? undefined : true)
 	},
 	kit: {
-		adapter: adapter()
+		adapter: adapter({
+			assets: output,
+			fallback: 'index.html',
+			pages: output,
+			strict: false
+		}),
+		files: {
+			appTemplate: 'web/src/app.html',
+			assets: 'web/static',
+			lib: 'web/src/lib',
+			routes: 'web/src/routes'
+		},
+		paths: {
+			base
+		}
 	}
 };
 

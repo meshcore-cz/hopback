@@ -5,28 +5,31 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
-		"build": "vite build",
+		"dev:server": "go run ./cmd/hopbackd",
+		"build": "npm run build:frontend:embed && npm run build:server && npm run build:agent",
+		"build:frontend": "vite build",
+		"build:frontend:embed": "SVELTEKIT_OUTPUT_DIR=cmd/hopbackd/frontend vite build",
+		"build:agent": "go build -o bin/hopback-agent ./cmd/hopback-agent",
+		"build:server": "go build -o bin/hopbackd ./cmd/hopbackd",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
-		"agent": "tsx agent/meshcore-ipc-agent.ts",
+		"agent": "go run ./cmd/hopback-agent",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
-		"start": "NODE_ENV=production tsx server/index.ts",
+		"start": "./bin/hopbackd",
 		"test:unit": "vitest",
-		"test": "npm run test:unit -- --run"
+		"test:go": "go test ./cmd/...",
+		"test": "npm run test:unit -- --run && npm run test:go"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
-		"@sveltejs/adapter-node": "^5.5.4",
+		"@sveltejs/adapter-static": "^3.0.10",
 		"@sveltejs/kit": "^2.65.2",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
 		"@tailwindcss/vite": "^4.3.0",
-		"@types/better-sqlite3": "^7.6.13",
 		"@types/node": "^25.9.3",
-		"@types/qrcode": "^1.5.6",
-		"@types/ws": "^8.18.1",
 		"eslint": "^10.4.1",
 		"eslint-config-prettier": "^10.1.8",
 		"eslint-plugin-svelte": "^3.19.0",
@@ -37,7 +40,6 @@
 		"svelte": "^5.56.1",
 		"svelte-check": "^4.6.0",
 		"tailwindcss": "^4.3.0",
-		"tsx": "^4.22.4",
 		"typescript": "^6.0.3",
 		"typescript-eslint": "^8.60.1",
 		"vite": "^8.0.16",
@@ -45,12 +47,7 @@
 	},
 	"dependencies": {
 		"@lucide/svelte": "^1.21.0",
-		"@meshcore-cz/meshpkt": "^0.1.11",
 		"@types/leaflet": "^1.9.21",
-		"better-sqlite3": "^12.11.1",
-		"leaflet": "^1.9.4",
-		"qrcode": "^1.5.4",
-		"ws": "^8.21.0",
-		"yaml": "^2.9.0"
+		"leaflet": "^1.9.4"
 	}
 }
