@@ -119,47 +119,47 @@ type AgentStatus struct {
 }
 
 type Test struct {
-	ID                     string             `json:"id"`
-	BrowserID              string             `json:"browserId"`
-	UserPublicKey          string             `json:"userPublicKey"`
-	EndpointID             string             `json:"endpointId"`
-	EndpointName           string             `json:"endpointName"`
-	EndpointRegion         string             `json:"endpointRegion"`
-	EndpointPublicKey      string             `json:"endpointPublicKey"`
-	EndpointLocation       *Location          `json:"endpointLocation,omitempty"`
-	Code                   string             `json:"code"`
-	Status                 string             `json:"status"`
-	QRPayload              string             `json:"qrPayload"`
-	QRDataURL              string             `json:"qrDataUrl,omitempty"`
-	OutboundSeenAt         *string            `json:"outboundSeenAt,omitempty"`
-	OutboundEndpointSeenAt *string            `json:"outboundEndpointSeenAt,omitempty"`
-	OutboundAckSeenAt      *string            `json:"outboundAckSeenAt,omitempty"`
-	ReplyBroadcastAt       *string            `json:"replyBroadcastAt,omitempty"`
-	ReturnSeenAt           *string            `json:"returnSeenAt,omitempty"`
-	ReplyAckSeenAt         *string            `json:"replyAckSeenAt,omitempty"`
-	ReplyEndpointAckAt     *string            `json:"replyEndpointAckAt,omitempty"`
-	OutboundHash           *string            `json:"outboundHash,omitempty"`
-	OutboundAckHash        *string            `json:"outboundAckHash,omitempty"`
-	OutboundAckCRCHex      *string            `json:"outboundAckCrcHex,omitempty"`
-	ReturnHash             *string            `json:"returnHash,omitempty"`
-	ReplyHash              *string            `json:"replyHash,omitempty"`
-	ReplyAckHash           *string            `json:"replyAckHash,omitempty"`
-	ReplyAckCRCHex         *string            `json:"replyAckCrcHex,omitempty"`
-	OutboundHex            *string            `json:"outboundHex,omitempty"`
-	OutboundAckHex         *string            `json:"outboundAckHex,omitempty"`
-	ReturnHex              *string            `json:"returnHex,omitempty"`
-	ReplyHex               *string            `json:"replyHex,omitempty"`
-	ReplyAckHex            *string            `json:"replyAckHex,omitempty"`
-	ReplyStatus            *string            `json:"replyStatus,omitempty"`
-	CreatedAt              string             `json:"createdAt"`
-	UpdatedAt              string             `json:"updatedAt"`
-	ExpiresAt              string             `json:"expiresAt"`
-	Observations           []Observation      `json:"observations"`
-	Nodes                  map[string]NodeRef `json:"nodes"`
-	ObservationCount       *int               `json:"observationCount,omitempty"`
-	DeliveryPaths          map[string][]any   `json:"deliveryPaths,omitempty"`
-	PropagationMap         map[string][]any   `json:"propagationMap,omitempty"`
-	PathStatistics         *map[string]any    `json:"pathStatistics,omitempty"`
+	ID                     string                          `json:"id"`
+	BrowserID              string                          `json:"browserId"`
+	UserPublicKey          string                          `json:"userPublicKey"`
+	EndpointID             string                          `json:"endpointId"`
+	EndpointName           string                          `json:"endpointName"`
+	EndpointRegion         string                          `json:"endpointRegion"`
+	EndpointPublicKey      string                          `json:"endpointPublicKey"`
+	EndpointLocation       *Location                       `json:"endpointLocation,omitempty"`
+	Code                   string                          `json:"code"`
+	Status                 string                          `json:"status"`
+	QRPayload              string                          `json:"qrPayload"`
+	QRDataURL              string                          `json:"qrDataUrl,omitempty"`
+	OutboundSeenAt         *string                         `json:"outboundSeenAt,omitempty"`
+	OutboundEndpointSeenAt *string                         `json:"outboundEndpointSeenAt,omitempty"`
+	OutboundAckSeenAt      *string                         `json:"outboundAckSeenAt,omitempty"`
+	ReplyBroadcastAt       *string                         `json:"replyBroadcastAt,omitempty"`
+	ReturnSeenAt           *string                         `json:"returnSeenAt,omitempty"`
+	ReplyAckSeenAt         *string                         `json:"replyAckSeenAt,omitempty"`
+	ReplyEndpointAckAt     *string                         `json:"replyEndpointAckAt,omitempty"`
+	OutboundHash           *string                         `json:"outboundHash,omitempty"`
+	OutboundAckHash        *string                         `json:"outboundAckHash,omitempty"`
+	OutboundAckCRCHex      *string                         `json:"outboundAckCrcHex,omitempty"`
+	ReturnHash             *string                         `json:"returnHash,omitempty"`
+	ReplyHash              *string                         `json:"replyHash,omitempty"`
+	ReplyAckHash           *string                         `json:"replyAckHash,omitempty"`
+	ReplyAckCRCHex         *string                         `json:"replyAckCrcHex,omitempty"`
+	OutboundHex            *string                         `json:"outboundHex,omitempty"`
+	OutboundAckHex         *string                         `json:"outboundAckHex,omitempty"`
+	ReturnHex              *string                         `json:"returnHex,omitempty"`
+	ReplyHex               *string                         `json:"replyHex,omitempty"`
+	ReplyAckHex            *string                         `json:"replyAckHex,omitempty"`
+	ReplyStatus            *string                         `json:"replyStatus,omitempty"`
+	CreatedAt              string                          `json:"createdAt"`
+	UpdatedAt              string                          `json:"updatedAt"`
+	ExpiresAt              string                          `json:"expiresAt"`
+	Observations           []Observation                   `json:"observations"`
+	Nodes                  map[string]NodeRef              `json:"nodes"`
+	ObservationCount       *int                            `json:"observationCount,omitempty"`
+	DeliveryPaths          map[string][]DeliveryPathOption `json:"deliveryPaths,omitempty"`
+	PropagationMap         *PropagationMapData             `json:"propagationMap,omitempty"`
+	PathStatistics         *PathStatistics                 `json:"pathStatistics,omitempty"`
 }
 
 type Observation struct {
@@ -173,6 +173,7 @@ type Observation struct {
 	HopCount     int       `json:"hopCount"`
 	Path         []string  `json:"path"`
 	PathKeys     []*string `json:"pathKeys"`
+	DistanceKm   *float64  `json:"distanceKm,omitempty"`
 	DecodedType  *string   `json:"decodedType,omitempty"`
 	CreatedAt    string    `json:"createdAt"`
 }
@@ -194,6 +195,62 @@ type NodeRef struct {
 	PublicKey string   `json:"publicKey,omitempty"`
 	Lat       *float64 `json:"lat,omitempty"`
 	Lon       *float64 `json:"lon,omitempty"`
+}
+
+type DeliveryPathRow struct {
+	Key       string   `json:"key"`
+	Name      string   `json:"name"`
+	Meta      string   `json:"meta"`
+	Short     string   `json:"short"`
+	PublicKey *string  `json:"publicKey,omitempty"`
+	ShortHash *string  `json:"shortHash,omitempty"`
+	Lat       *float64 `json:"lat,omitempty"`
+	Lon       *float64 `json:"lon,omitempty"`
+	HasCoords bool     `json:"hasCoords,omitempty"`
+	Tone      string   `json:"tone"`
+}
+
+type DeliveryPathOption struct {
+	Key           string            `json:"key"`
+	Direction     string            `json:"direction"`
+	HopCount      int               `json:"hopCount"`
+	ObservationID int64             `json:"observationId"`
+	PacketHash    string            `json:"packetHash"`
+	CreatedAt     string            `json:"createdAt"`
+	Rows          []DeliveryPathRow `json:"rows"`
+}
+
+type PropagationMapPoint struct {
+	Key       string  `json:"key"`
+	Name      string  `json:"name"`
+	Kind      string  `json:"kind"`
+	PublicKey *string `json:"publicKey,omitempty"`
+	Lat       float64 `json:"lat"`
+	Lon       float64 `json:"lon"`
+}
+
+type PropagationMapSegment struct {
+	Key       string     `json:"key"`
+	Direction string     `json:"direction"`
+	Kind      string     `json:"kind"`
+	From      [2]float64 `json:"from"`
+	To        [2]float64 `json:"to"`
+}
+
+type PropagationMapData struct {
+	Points   []PropagationMapPoint   `json:"points"`
+	Segments []PropagationMapSegment `json:"segments"`
+}
+
+type PathStatistics struct {
+	TotalPaths           int      `json:"totalPaths"`
+	OutboundPaths        int      `json:"outboundPaths"`
+	ReturnPaths          int      `json:"returnPaths"`
+	LongestDistanceKm    *float64 `json:"longestDistanceKm,omitempty"`
+	LongestDistanceLabel *string  `json:"longestDistanceLabel,omitempty"`
+	LongestHopCount      int      `json:"longestHopCount"`
+	ShortestHopCount     int      `json:"shortestHopCount"`
+	AverageDistanceKm    *float64 `json:"averageDistanceKm,omitempty"`
 }
 
 type Store struct {
@@ -718,10 +775,344 @@ func (rt *Runtime) decorate(t *Test) *Test {
 	if t.Nodes == nil {
 		t.Nodes = map[string]NodeRef{}
 	}
+	for i := range t.Observations {
+		if t.Observations[i].Path == nil {
+			t.Observations[i].Path = []string{}
+		}
+		if t.Observations[i].PathKeys == nil {
+			t.Observations[i].PathKeys = []*string{}
+		}
+	}
+	rt.resolveObservationNodes(t)
 	t.Status = deriveStatus(t)
-	t.DeliveryPaths = map[string][]any{"outbound": {}, "return": {}}
-	t.PropagationMap = map[string][]any{"points": {}, "segments": {}}
+	t.DeliveryPaths = rt.deliveryPaths(t)
+	t.PropagationMap = rt.propagationMap(t)
+	t.PathStatistics = pathStatistics(t)
 	return t
+}
+
+func (rt *Runtime) resolveObservationNodes(t *Test) {
+	keys := []string{t.UserPublicKey, t.EndpointPublicKey}
+	for _, obs := range t.Observations {
+		if obs.ObserverID != nil {
+			keys = append(keys, *obs.ObserverID)
+		}
+		keys = append(keys, obs.Path...)
+	}
+	nodes, _ := rt.store.LookupNodes(keys)
+	for key, node := range nodes {
+		t.Nodes[key] = node
+	}
+	for i := range t.Observations {
+		obs := &t.Observations[i]
+		if obs.ObserverID != nil {
+			if key := nodeKey(*obs.ObserverID, nodes); key != "" {
+				obs.ObserverKey = &key
+			}
+		}
+		obs.PathKeys = make([]*string, len(obs.Path))
+		for j, hop := range obs.Path {
+			if key := nodeKey(hop, nodes); key != "" {
+				obs.PathKeys[j] = &key
+			}
+		}
+		if d := rt.observationDistanceKm(t, *obs); d != nil {
+			obs.DistanceKm = d
+		}
+	}
+}
+
+func (rt *Runtime) observationDistanceKm(t *Test, obs Observation) *float64 {
+	points := rt.pathCoordinatePoints(t, obs)
+	if len(points) < 2 {
+		return nil
+	}
+	total := 0.0
+	for i := 1; i < len(points); i++ {
+		total += haversineKm(points[i-1][0], points[i-1][1], points[i][0], points[i][1])
+	}
+	return &total
+}
+
+func (rt *Runtime) deliveryPaths(t *Test) map[string][]DeliveryPathOption {
+	paths := map[string][]DeliveryPathOption{"outbound": {}, "return": {}}
+	for _, direction := range []string{"outbound", "return"} {
+		candidates := []Observation{}
+		for _, obs := range t.Observations {
+			if obs.Direction == direction && !isAckType(strVal(obs.DecodedType)) {
+				candidates = append(candidates, obs)
+			}
+		}
+		if len(candidates) == 0 {
+			for _, obs := range t.Observations {
+				if obs.Direction == direction && isAckType(strVal(obs.DecodedType)) {
+					candidates = append(candidates, obs)
+				}
+			}
+		}
+		for _, obs := range candidates {
+			rows := rt.deliveryRows(t, obs)
+			paths[obs.Direction] = append(paths[obs.Direction], DeliveryPathOption{
+				Key:           fmt.Sprintf("%s:%d:%s", obs.Direction, obs.ID, obs.PacketHash),
+				Direction:     obs.Direction,
+				HopCount:      obs.HopCount,
+				ObservationID: obs.ID,
+				PacketHash:    obs.PacketHash,
+				CreatedAt:     obs.CreatedAt,
+				Rows:          rows,
+			})
+		}
+	}
+	for direction := range paths {
+		sort.Slice(paths[direction], func(i, j int) bool {
+			if paths[direction][i].HopCount == paths[direction][j].HopCount {
+				return paths[direction][i].CreatedAt < paths[direction][j].CreatedAt
+			}
+			return paths[direction][i].HopCount < paths[direction][j].HopCount
+		})
+	}
+	return paths
+}
+
+func (rt *Runtime) deliveryRows(t *Test, obs Observation) []DeliveryPathRow {
+	rows := []DeliveryPathRow{rt.edgeRow(t, obs.Direction, "start")}
+	for i, hop := range obs.Path {
+		key := hop
+		if i < len(obs.PathKeys) && obs.PathKeys[i] != nil {
+			key = *obs.PathKeys[i]
+		}
+		node := t.Nodes[key]
+		name := firstNonEmpty(node.Name, "Node "+shortLabel(hop))
+		short := firstNonEmpty(node.ShortHash, hop)
+		pub := ptrIf(node.PublicKey)
+		shortPtr := ptrIf(short)
+		rows = append(rows, DeliveryPathRow{
+			Key:       fmt.Sprintf("%s:hop:%d:%s", obs.Direction, i, key),
+			Name:      name,
+			Meta:      "Hop " + strconv.Itoa(i+1),
+			Short:     shortLabel(short),
+			PublicKey: pub,
+			ShortHash: shortPtr,
+			Lat:       node.Lat,
+			Lon:       node.Lon,
+			HasCoords: hasCoords(node.Lat, node.Lon),
+			Tone:      "hop",
+		})
+	}
+	rows = append(rows, rt.edgeRow(t, obs.Direction, "end"))
+	return rows
+}
+
+func (rt *Runtime) edgeRow(t *Test, direction, edge string) DeliveryPathRow {
+	key := direction + ":" + edge
+	isUser := (direction == "outbound" && edge == "start") || (direction == "return" && edge == "end")
+	if isUser {
+		node := t.Nodes[strings.ToLower(t.UserPublicKey)]
+		return DeliveryPathRow{
+			Key:       key,
+			Name:      firstNonEmpty(node.Name, "User app"),
+			Meta:      "User public key",
+			Short:     shortLabel(firstNonEmpty(node.ShortHash, t.UserPublicKey)),
+			PublicKey: &t.UserPublicKey,
+			ShortHash: ptrIf(node.ShortHash),
+			Lat:       node.Lat,
+			Lon:       node.Lon,
+			HasCoords: hasCoords(node.Lat, node.Lon),
+			Tone:      "edge",
+		}
+	}
+	var lat, lon *float64
+	if t.EndpointLocation != nil {
+		lat, lon = t.EndpointLocation.Lat, t.EndpointLocation.Lon
+	}
+	node := t.Nodes[strings.ToLower(t.EndpointPublicKey)]
+	if !hasCoords(lat, lon) && hasCoords(node.Lat, node.Lon) {
+		lat, lon = node.Lat, node.Lon
+	}
+	return DeliveryPathRow{
+		Key:       key,
+		Name:      firstNonEmpty(node.Name, t.EndpointName),
+		Meta:      t.EndpointRegion,
+		Short:     shortLabel(firstNonEmpty(node.ShortHash, t.EndpointPublicKey)),
+		PublicKey: &t.EndpointPublicKey,
+		ShortHash: ptrIf(node.ShortHash),
+		Lat:       lat,
+		Lon:       lon,
+		HasCoords: hasCoords(lat, lon),
+		Tone:      "edge",
+	}
+}
+
+func (rt *Runtime) propagationMap(t *Test) *PropagationMapData {
+	out := &PropagationMapData{Points: []PropagationMapPoint{}, Segments: []PropagationMapSegment{}}
+	points := map[string]bool{}
+	addPoint := func(row DeliveryPathRow, kind string) {
+		if !hasCoords(row.Lat, row.Lon) || points[row.Key] {
+			return
+		}
+		points[row.Key] = true
+		out.Points = append(out.Points, PropagationMapPoint{
+			Key:       row.Key,
+			Name:      row.Name,
+			Kind:      kind,
+			PublicKey: row.PublicKey,
+			Lat:       *row.Lat,
+			Lon:       *row.Lon,
+		})
+	}
+	for _, obs := range t.Observations {
+		rows := rt.deliveryRows(t, obs)
+		for i, row := range rows {
+			kind := "node"
+			if i == 0 || i == len(rows)-1 {
+				kind = "endpoint"
+			}
+			addPoint(row, kind)
+		}
+		if obs.ObserverKey != nil {
+			if node := t.Nodes[*obs.ObserverKey]; hasCoords(node.Lat, node.Lon) {
+				addPoint(DeliveryPathRow{Key: "observer:" + *obs.ObserverKey, Name: firstNonEmpty(strVal(obs.ObserverName), node.Name), PublicKey: ptrIf(node.PublicKey), Lat: node.Lat, Lon: node.Lon}, "observer")
+			}
+		}
+		coords := rowsWithCoords(rows)
+		for i := 1; i < len(coords); i++ {
+			out.Segments = append(out.Segments, PropagationMapSegment{
+				Key:       fmt.Sprintf("%s:%d:%s", obs.Direction, i, obs.PacketHash),
+				Direction: obs.Direction,
+				Kind:      packetKind(obs),
+				From:      [2]float64{*coords[i-1].Lat, *coords[i-1].Lon},
+				To:        [2]float64{*coords[i].Lat, *coords[i].Lon},
+			})
+		}
+	}
+	return out
+}
+
+func pathStatistics(t *Test) *PathStatistics {
+	if len(t.Observations) == 0 {
+		return nil
+	}
+	uniqueAll := map[string]bool{}
+	uniqueOut := map[string]bool{}
+	uniqueReturn := map[string]bool{}
+	longestHop := 0
+	maxInt := int(^uint(0) >> 1)
+	shortestHop := maxInt
+	var longestDistance *float64
+	var longestLabel *string
+	totalDistance := 0.0
+	distanceCount := 0
+	for _, obs := range t.Observations {
+		key := obs.Direction + ":" + strings.Join(obs.Path, ">")
+		uniqueAll[key] = true
+		if obs.Direction == "outbound" {
+			uniqueOut[key] = true
+		}
+		if obs.Direction == "return" {
+			uniqueReturn[key] = true
+		}
+		longestHop = max(longestHop, obs.HopCount)
+		shortestHop = min(shortestHop, obs.HopCount)
+		if obs.DistanceKm != nil {
+			totalDistance += *obs.DistanceKm
+			distanceCount++
+			if longestDistance == nil || *obs.DistanceKm > *longestDistance {
+				v := *obs.DistanceKm
+				longestDistance = &v
+				label := firstNonEmpty(strVal(obs.ObserverName), strVal(obs.ObserverID), obs.Source)
+				longestLabel = &label
+			}
+		}
+	}
+	if shortestHop == maxInt {
+		shortestHop = 0
+	}
+	var avg *float64
+	if distanceCount > 0 {
+		v := totalDistance / float64(distanceCount)
+		avg = &v
+	}
+	return &PathStatistics{TotalPaths: len(uniqueAll), OutboundPaths: len(uniqueOut), ReturnPaths: len(uniqueReturn), LongestDistanceKm: longestDistance, LongestDistanceLabel: longestLabel, LongestHopCount: longestHop, ShortestHopCount: shortestHop, AverageDistanceKm: avg}
+}
+
+func (rt *Runtime) pathCoordinatePoints(t *Test, obs Observation) [][2]float64 {
+	rows := rt.deliveryRows(t, obs)
+	out := make([][2]float64, 0, len(rows))
+	for _, row := range rows {
+		if hasCoords(row.Lat, row.Lon) {
+			out = append(out, [2]float64{*row.Lat, *row.Lon})
+		}
+	}
+	return out
+}
+
+func rowsWithCoords(rows []DeliveryPathRow) []DeliveryPathRow {
+	out := []DeliveryPathRow{}
+	for _, row := range rows {
+		if hasCoords(row.Lat, row.Lon) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func nodeKey(value string, nodes map[string]NodeRef) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	if _, ok := nodes[value]; ok {
+		return value
+	}
+	for key, node := range nodes {
+		if strings.EqualFold(node.PublicKey, value) || strings.EqualFold(node.ShortHash, value) {
+			return key
+		}
+	}
+	return ""
+}
+
+func hasCoords(lat, lon *float64) bool {
+	return lat != nil && lon != nil && !math.IsNaN(*lat) && !math.IsNaN(*lon)
+}
+
+func shortLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "?"
+	}
+	if len(value) <= 8 {
+		return value
+	}
+	return value[:8]
+}
+
+func packetKind(obs Observation) string {
+	typ := strVal(obs.DecodedType)
+	if isAckType(typ) {
+		if obs.Direction == "outbound" {
+			if typ == "PATH" || typ == "PATH_IDENTITY" {
+				return "ack+path"
+			}
+			return "ack"
+		}
+		return "reply ack"
+	}
+	if obs.Direction == "outbound" {
+		return "user msg"
+	}
+	return "reply"
+}
+
+func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
+	const earthKm = 6371.0088
+	toRad := func(v float64) float64 { return v * math.Pi / 180 }
+	dLat := toRad(lat2 - lat1)
+	dLon := toRad(lon2 - lon1)
+	rLat1 := toRad(lat1)
+	rLat2 := toRad(lat2)
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) + math.Cos(rLat1)*math.Cos(rLat2)*math.Sin(dLon/2)*math.Sin(dLon/2)
+	return earthKm * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
 func (rt *Runtime) registerActive(t *Test) {
@@ -1069,10 +1460,15 @@ func (rt *Runtime) recordPacket(event PacketEvent, testID, direction, typ string
 	rt.applyFactsLocked(active.Test, obs, event.RawHex)
 	rt.rebuildIndexLocked()
 	testCopy := *active.Test
+	facts := activeFacts(active.Test)
 	rt.mu.Unlock()
 
-	_ = rt.store.AddObservation(testID, obs)
-	_ = rt.store.UpdateFacts(testID, activeFacts(active.Test))
+	if err := rt.store.AddObservation(testID, obs); err != nil {
+		log.Printf("[runtime] store observation failed for test %s: %v", testID, err)
+	}
+	if err := rt.store.UpdateFacts(testID, facts); err != nil {
+		log.Printf("[runtime] store facts failed for test %s: %v", testID, err)
+	}
 	rt.publishObservation(rt.decorate(&testCopy), obs)
 	return true
 }
@@ -2021,6 +2417,53 @@ func (s *Store) ListNodes(q string, limit int, updatedAfter *string) ([]NodeReco
 			n.Lon = &lon.Float64
 		}
 		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) LookupNodes(keys []string) (map[string]NodeRef, error) {
+	clean := []string{}
+	seen := map[string]bool{}
+	for _, key := range keys {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		clean = append(clean, key)
+	}
+	if len(clean) == 0 {
+		return map[string]NodeRef{}, nil
+	}
+	qs := strings.TrimRight(strings.Repeat("?,", len(clean)), ",")
+	args := make([]any, 0, len(clean)*2)
+	for _, key := range clean {
+		args = append(args, key)
+	}
+	for _, key := range clean {
+		args = append(args, key)
+	}
+	rows, err := s.db.Query(`select public_key,name,short_hash,lat,lon from nodes where lower(public_key) in (`+qs+`) or lower(short_hash) in (`+qs+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]NodeRef{}
+	for rows.Next() {
+		var pub, name, short string
+		var lat, lon sql.NullFloat64
+		if err := rows.Scan(&pub, &name, &short, &lat, &lon); err != nil {
+			return nil, err
+		}
+		node := NodeRef{Name: name, ShortHash: short, PublicKey: pub}
+		if lat.Valid {
+			node.Lat = &lat.Float64
+		}
+		if lon.Valid {
+			node.Lon = &lon.Float64
+		}
+		out[strings.ToLower(pub)] = node
+		out[strings.ToLower(short)] = node
 	}
 	return out, rows.Err()
 }

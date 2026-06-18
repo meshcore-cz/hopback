@@ -144,6 +144,8 @@ export const cs: Record<MessageKey | string, string> = {
 	'progress.detail.replySentPreparing': 'Agent koncového bodu připravuje odpověď.',
 	'progress.detail.replySentBlocked': 'Odpověď začne, jakmile koncový bod přijme vaši zprávu.',
 	'progress.detail.replySeen': '{observers} vidělo odpověď koncového bodu{after} přes {hops}.',
+	'progress.detail.replySeenInferred':
+		'Paket odpovědi nebyl přímo pozorován, ale jeho ACK byl zachycen{after}.',
 	'progress.detail.replySeenWaiting': 'Čekání, až pozorovatelé zachytí odpověď koncového bodu.',
 	'progress.detail.replySeenBlocked': 'V síti zatím není žádný paket odpovědi.',
 	'progress.detail.ackSeen': '{observers} vidělo ACK odpovědi{after}.',

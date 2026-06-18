@@ -144,6 +144,8 @@ export const en = {
 	'progress.detail.replySentPreparing': 'Endpoint agent is preparing the reply.',
 	'progress.detail.replySentBlocked': 'Reply starts after the endpoint receives your message.',
 	'progress.detail.replySeen': '{observers} saw the endpoint reply{after} via {hops}.',
+	'progress.detail.replySeenInferred':
+		'The reply packet was not observed directly, but its ACK was seen{after}.',
 	'progress.detail.replySeenWaiting': 'Waiting for observers to catch the endpoint reply.',
 	'progress.detail.replySeenBlocked': 'No reply packet on the mesh yet.',
 	'progress.detail.ackSeen': '{observers} saw the reply ACK{after}.',

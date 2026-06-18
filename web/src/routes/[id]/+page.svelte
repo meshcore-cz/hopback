@@ -313,13 +313,30 @@
 		updated: DiagnosticTest,
 		observation?: PacketObservation
 	): DiagnosticTest {
+		const observations = mergeObservations(current.observations, updated.observations, observation);
 		return {
 			...current,
 			...updated,
 			qrDataUrl: updated.qrDataUrl || current.qrDataUrl,
 			nodes: { ...current.nodes, ...updated.nodes },
-			observations: observation ? [observation, ...current.observations] : updated.observations
+			observations
 		};
+	}
+
+	function mergeObservations(
+		current: PacketObservation[],
+		updated: PacketObservation[] | undefined,
+		observation?: PacketObservation
+	) {
+		const base = updated?.length ? updated : current;
+		const next = observation ? [observation, ...base] : base;
+		const seen: Record<string, true> = {};
+		return next.filter((item) => {
+			const key = `${item.id}:${item.packetHash}:${item.direction}:${item.source}`;
+			if (seen[key]) return false;
+			seen[key] = true;
+			return true;
+		});
 	}
 
 	function latency(start?: string | null, end?: string | null) {
@@ -539,6 +556,18 @@
 
 	// Delivery rows are built server-side (English); translate their edge labels here
 	// using the row key (`${direction}:start|end|${index}:…`) and the test state.
+	// Shortest badge length (2 or 4 chars) that keeps every node in a path
+	// distinguishable, so the circle never overflows with long hashes.
+	function deliveryBadgeLen(rows: DeliveryPathOption['rows']) {
+		const shorts = rows.map((row) => row.short ?? '');
+		const unique2 = new Set(shorts.map((short) => short.slice(0, 2))).size === shorts.length;
+		return unique2 ? 2 : 4;
+	}
+
+	function deliveryBadge(short: string, len: number) {
+		return short.length <= len ? short : short.slice(0, len);
+	}
+
 	function deliveryRowName(
 		row: DeliveryPathOption['rows'][number],
 		current: DiagnosticTest,
@@ -689,9 +718,13 @@
 							after: afterPhrase(current.replyBroadcastAt, current.returnSeenAt),
 							hops: hopLabel(bestHopCount(returnMessages))
 						})
-					: current.replyBroadcastAt
-						? t('progress.detail.replySeenWaiting')
-						: t('progress.detail.replySeenBlocked')
+					: current.replyAckSeenAt
+						? t('progress.detail.replySeenInferred', {
+								after: afterPhrase(current.replyBroadcastAt, current.replyAckSeenAt)
+							})
+						: current.replyBroadcastAt
+							? t('progress.detail.replySeenWaiting')
+							: t('progress.detail.replySeenBlocked')
 			},
 			{
 				label: t('progress.step.ackSeen'),
@@ -1442,6 +1475,7 @@
 			{/if}
 		</div>
 		{#if observation}
+			{@const badgeLen = deliveryBadgeLen(observation.rows)}
 			<div class="grid gap-3">
 				{#each observation.rows as row, index (row.key)}
 					<button
@@ -1456,9 +1490,9 @@
 						title={row.publicKey ? t('route.openNode') : undefined}
 					>
 						<span
-							class={`z-10 grid size-10 shrink-0 place-items-center rounded-full text-sm font-semibold transition ${row.tone === 'edge' ? 'bg-teal-100 text-teal-900 group-hover:bg-teal-200' : 'bg-neutral-100 text-neutral-700 group-hover:bg-teal-100 group-hover:text-teal-900'}`}
+							class={`z-10 grid size-10 shrink-0 place-items-center rounded-full text-sm font-semibold tracking-tight tabular-nums transition ${row.tone === 'edge' ? 'bg-teal-100 text-teal-900 group-hover:bg-teal-200' : 'bg-neutral-100 text-neutral-700 group-hover:bg-teal-100 group-hover:text-teal-900'}`}
 						>
-							{row.short}
+							{deliveryBadge(row.short, badgeLen)}
 						</span>
 						<span class="min-w-0 pt-0.5">
 							<span class="block truncate text-sm font-semibold text-neutral-950"
@@ -1668,34 +1702,38 @@
 				</div>
 			</div>
 
-			<div class="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+			<div class="mt-3 grid grid-cols-2 gap-2 text-sm lg:grid-cols-4">
 				<div class="rounded-md border border-neutral-200 bg-neutral-50/70 p-2.5">
-					<div class="flex items-center gap-1.5 text-neutral-400">
-						<Eye size={13} />
-						<p class="text-xs">{t('route.observations')}</p>
+					<div class="flex min-w-0 items-center gap-1.5 text-neutral-400">
+						<Eye size={13} class="shrink-0" />
+						<p class="truncate text-xs">{t('route.observations')}</p>
 					</div>
-					<p class="mt-1 font-semibold text-neutral-900">{messages.length}</p>
+					<p class="mt-1 font-semibold tabular-nums text-neutral-900">{messages.length}</p>
 				</div>
 				<div class="rounded-md border border-neutral-200 bg-neutral-50/70 p-2.5">
-					<div class="flex items-center gap-1.5 text-neutral-400">
-						<Users size={13} />
-						<p class="text-xs">{t('route.observers')}</p>
+					<div class="flex min-w-0 items-center gap-1.5 text-neutral-400">
+						<Users size={13} class="shrink-0" />
+						<p class="truncate text-xs">{t('route.observers')}</p>
 					</div>
-					<p class="mt-1 font-semibold text-neutral-900">{observerCoverage(messages)}</p>
+					<p class="mt-1 whitespace-nowrap font-semibold tabular-nums text-neutral-900">
+						{observerCoverage(messages)}
+					</p>
 				</div>
 				<div class="rounded-md border border-neutral-200 bg-neutral-50/70 p-2.5">
-					<div class="flex items-center gap-1.5 text-neutral-400">
-						<Waypoints size={13} />
-						<p class="text-xs">{t('route.paths')}</p>
+					<div class="flex min-w-0 items-center gap-1.5 text-neutral-400">
+						<Waypoints size={13} class="shrink-0" />
+						<p class="truncate text-xs">{t('route.paths')}</p>
 					</div>
-					<p class="mt-1 font-semibold text-neutral-900">{uniquePathCount(messages)}</p>
+					<p class="mt-1 font-semibold tabular-nums text-neutral-900">{uniquePathCount(messages)}</p>
 				</div>
 				<div class="rounded-md border border-neutral-200 bg-neutral-50/70 p-2.5">
-					<div class="flex items-center gap-1.5 text-neutral-400">
-						<Timer size={13} />
-						<p class="text-xs">{t('route.propagation')}</p>
+					<div class="flex min-w-0 items-center gap-1.5 text-neutral-400">
+						<Timer size={13} class="shrink-0" />
+						<p class="truncate text-xs">{t('route.propagation')}</p>
 					</div>
-					<p class="mt-1 font-semibold text-neutral-900">{propagationTime(messages)}</p>
+					<p class="mt-1 whitespace-nowrap font-semibold tabular-nums text-neutral-900">
+						{propagationTime(messages)}
+					</p>
 				</div>
 			</div>
 
