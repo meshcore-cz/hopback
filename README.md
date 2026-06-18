@@ -1,6 +1,6 @@
 # Hopback
 
-MeshCore Test is a web-based diagnostic service for checking real connectivity between a user and selected [MeshCore](http://meshcore.io/) endpoints in different cities or regions. The user enters their public key, chooses an endpoint, and receives a temporary code and QR contact card. After sending the code over MeshCore, the page updates live as the message is detected, routed, received, verified, and answered.
+Hopback is a web-based diagnostic service for checking real connectivity between a user and selected [MeshCore](http://meshcore.io/) endpoints in different cities or regions. The user enters their public key, chooses an endpoint, and receives a temporary code and QR contact card. After sending the code over MeshCore, the page updates live as the message is detected, routed, received, verified, and answered.
 
 The interface visualizes both directions of the test: the path from the user to the endpoint and the return path back to the user. It can display resolved repeaters, hop counts, packet observations, timing, signal data, route differences, reply status, and whether the full round trip succeeded or only one direction worked.
 
@@ -11,8 +11,7 @@ The service combines a simple web frontend, a central real-time backend, [CoreSc
 - SvelteKit 2 / Svelte 5 frontend
 - Node adapter with a custom WebSocket gateway
 - SQLite via `better-sqlite3`
-- CoreScope WebSocket monitors for `wss://analyzer.meshcore.cz` and `wss://mc.pp0.co`
-- CoreScope node cache loaded from `/api/nodes?limit=2000&offset=0`
+- CoreScope WebSocket real-time metrics and node information
 - Mesh packet matching through `@meshcore-cz/meshpkt`
 - Lightweight agent bridge for meshcore-go IPC
 
