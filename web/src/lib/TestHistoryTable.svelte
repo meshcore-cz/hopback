@@ -11,10 +11,11 @@
 		tests: DiagnosticTest[];
 		ownTestIds?: string[];
 		loading?: boolean;
+		animateRows?: boolean;
 		emptyText: string;
 	}
 
-	let { tests, ownTestIds = [], loading = false, emptyText }: Props = $props();
+	let { tests, ownTestIds = [], loading = false, animateRows = false, emptyText }: Props = $props();
 
 	function isOwnTest(test: DiagnosticTest) {
 		return ownTestIds.includes(test.id);
@@ -93,7 +94,11 @@
 				<tr
 					class={`group cursor-pointer transition-colors ${mine ? 'bg-teal-50/70 hover:bg-teal-100/70' : 'hover:bg-neutral-50'}`}
 					onclick={() => goto(resolve('/[id]', { id: test.id }))}
-					in:slide={{ duration: 300, delay: Math.min(index, 12) * 40, easing: cubicOut }}
+					in:slide|global={{
+						duration: animateRows ? 220 : 0,
+						delay: animateRows ? Math.min(index, 8) * 30 : 0,
+						easing: cubicOut
+					}}
 				>
 					<td class="py-2 pr-3">
 						<span
