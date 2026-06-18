@@ -2,15 +2,13 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { fade, fly, slide } from 'svelte/transition';
+	import { fade, fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import {
 		AlertCircle,
 		ArrowRight,
 		CheckCircle2,
-		CircleDashed,
 		Clock3,
-		KeyRound,
 		LoaderCircle,
 		MapPin,
 		Plus,
@@ -19,16 +17,11 @@
 		Search,
 		X
 	} from '@lucide/svelte';
-	import type {
-		DiagnosticTest,
-		EndpointConfig,
-		NodeRecord,
-		RuntimeStatus,
-		TestStatus
-	} from '$lib/types';
+	import type { DiagnosticTest, EndpointConfig, NodeRecord, RuntimeStatus } from '$lib/types';
 	import { apiFetch } from '$lib/client/api';
-	import { t, localeTag } from '$lib/i18n/index.svelte';
+	import { t } from '$lib/i18n/index.svelte';
 	import LanguageSwitcher from '$lib/i18n/LanguageSwitcher.svelte';
+	import TestHistoryTable from '$lib/TestHistoryTable.svelte';
 
 	interface EndpointOption {
 		id: string;
@@ -54,6 +47,8 @@
 	let selectedEndpoint = $state('');
 	let endpointsLoaded = $state(false);
 	let history = $state<DiagnosticTest[]>([]);
+	let ownTestIds = $state<string[]>([]);
+	let historyTotal = $state(0);
 	let historyLoading = $state(false);
 	let historyLoaded = $state(false);
 	let status = $state<RuntimeStatus | null>(null);
@@ -99,7 +94,7 @@
 	onMount(() => {
 		mounted = true;
 		userPublicKey = localStorage.getItem('hopback.userPublicKey') || '';
-		loadHistoryFromStorage();
+		ownTestIds = loadLocalTestIds();
 		void refresh();
 		statusPoller = setInterval(() => void loadStatus(), 5000);
 		return () => {
@@ -113,34 +108,19 @@
 		localStorage.setItem('hopback.userPublicKey', normalizedPublicKey);
 	});
 
-	$effect(() => {
-		if (!mounted) return;
-		localStorage.setItem('hopback.testIds', JSON.stringify(history.map((test) => test.id)));
-	});
-
-	function loadHistoryFromStorage() {
+	function loadLocalTestIds() {
 		try {
 			const stored = localStorage.getItem('hopback.testIds');
 			if (stored) {
 				const parsed = JSON.parse(stored) as string[];
 				if (Array.isArray(parsed)) {
-					history = parsed.slice(0, 15).map(
-						(id) =>
-							({
-								id,
-								status: 'waiting',
-								endpointName: '',
-								userPublicKey: '',
-								code: '',
-								createdAt: '',
-								observationCount: 0
-							}) as DiagnosticTest
-					);
+					return parsed.filter((id) => typeof id === 'string' && id).slice(0, 200);
 				}
 			}
 		} catch {
-			history = [];
+			return [];
 		}
+		return [];
 	}
 
 	async function refresh() {
@@ -157,21 +137,16 @@
 	async function loadHistory() {
 		historyLoading = true;
 		try {
-			const stored = localStorage.getItem('hopback.testIds');
-			const ids = stored ? (JSON.parse(stored) as string[]) : [];
-			if (!Array.isArray(ids) || !ids.length) {
-				history = [];
-				return;
-			}
-			const response = await apiFetch('/api/tests/meta', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ ids: ids.slice(0, 15) })
-			});
-			const payload = (await response.json()) as { tests?: DiagnosticTest[] };
+			ownTestIds = loadLocalTestIds();
+			const query = new URLSearchParams({ limit: '15', offset: '0' });
+			if (ownTestIds.length) query.set('ids', ownTestIds.join(','));
+			const response = await apiFetch(`/api/tests?${query}`);
+			const payload = (await response.json()) as { tests?: DiagnosticTest[]; total?: number };
 			history = payload.tests || [];
+			historyTotal = payload.total ?? history.length;
 		} catch {
 			history = [];
+			historyTotal = 0;
 		} finally {
 			historyLoading = false;
 			historyLoaded = true;
@@ -265,43 +240,6 @@
 		}
 
 		await goto(resolve('/[id]', { id: payload.test.id }));
-	}
-
-	function statusMeta(current: TestStatus) {
-		if (current === 'completed')
-			return {
-				icon: CheckCircle2,
-				label: t('status.completed'),
-				className: 'bg-teal-50 text-teal-800'
-			};
-		if (current === 'failed' || current === 'expired')
-			return {
-				icon: AlertCircle,
-				label: t(`status.${current}`),
-				className: 'bg-red-50 text-red-800'
-			};
-		return {
-			icon: CircleDashed,
-			label: t(`status.${current}`),
-			className: 'bg-neutral-100 text-neutral-700'
-		};
-	}
-
-	function totalTime(test: DiagnosticTest) {
-		const unfinished =
-			test.status === 'expired' || test.status === 'failed' ? '—' : t('common.pending');
-		if (!test.returnSeenAt) return unfinished;
-		const start = new Date(test.createdAt).getTime();
-		const end = new Date(test.returnSeenAt).getTime();
-		if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return unfinished;
-		return `${((end - start) / 1000).toFixed(1)} s`;
-	}
-
-	function formatDateTime(value?: string | null) {
-		if (!value) return '—';
-		const date = new Date(value);
-		if (!Number.isFinite(date.getTime())) return '—';
-		return date.toLocaleString(localeTag(), { dateStyle: 'short', timeStyle: 'short' });
 	}
 
 	function relativeTime(value?: string | null) {
@@ -632,71 +570,20 @@
 					<Clock3 size={18} class="text-neutral-500" />
 					<h2 class="text-base font-semibold text-neutral-900">{t('history.title')}</h2>
 				</div>
-				<span class="text-xs text-neutral-500">{t('history.saved', { count: history.length })}</span
+				<span class="text-xs text-neutral-500">{t('history.visible', { count: historyTotal })}</span
 				>
 			</div>
 
-			<div class="overflow-x-auto">
-				<table class="w-full min-w-[860px] text-left text-sm">
-					<thead class="border-b border-neutral-200 text-xs uppercase text-neutral-500">
-						<tr>
-							<th class="py-2 pr-3 font-semibold">{t('history.col.status')}</th>
-							<th class="px-3 py-2 font-semibold">{t('history.col.endpoint')}</th>
-							<th class="px-3 py-2 font-semibold">{t('history.col.date')}</th>
-							<th class="px-3 py-2 font-semibold">{t('history.col.userKey')}</th>
-							<th class="px-3 py-2 font-semibold">{t('history.col.code')}</th>
-							<th class="px-3 py-2 font-semibold">{t('history.col.time')}</th>
-							<th class="px-3 py-2 font-semibold">{t('history.col.observed')}</th>
-						</tr>
-					</thead>
-					<tbody class="divide-y divide-neutral-100">
-						{#each history as test, index (test.id)}
-							{@const meta = statusMeta(test.status)}
-							{@const StatusIcon = meta.icon}
-							{@const time = totalTime(test)}
-							<tr
-								class="group cursor-pointer transition-colors hover:bg-neutral-50"
-								onclick={() => goto(resolve('/[id]', { id: test.id }))}
-								in:slide={{ duration: 300, delay: Math.min(index, 12) * 40, easing: cubicOut }}
-							>
-								<td class="py-2 pr-3">
-									<span
-										class={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold ${meta.className}`}
-									>
-										<StatusIcon size={13} />
-										{meta.label}
-									</span>
-								</td>
-								<td class="px-3 py-2">
-									<p class="font-medium text-neutral-950 group-hover:text-teal-800">
-										{test.endpointName}
-									</p>
-								</td>
-								<td class="whitespace-nowrap px-3 py-2 text-neutral-600">
-									<span title={relativeTime(test.createdAt)}>{formatDateTime(test.createdAt)}</span>
-								</td>
-								<td class="mono px-3 py-2 text-xs text-neutral-500">
-									<span class="inline-flex items-center gap-1">
-										<KeyRound size={13} />
-										{test.userPublicKey.slice(0, 10)}
-									</span>
-								</td>
-								<td class="mono px-3 py-2 font-semibold text-neutral-800">{test.code}</td>
-								<td class="px-3 py-2 text-neutral-600">
-									<span class={time === 'pending' || time === '—' ? 'opacity-50' : ''}>{time}</span>
-								</td>
-								<td class="px-3 py-2 text-neutral-600">
-									{test.observationCount ?? test.observations.length}
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
+			<TestHistoryTable
+				tests={history}
+				{ownTestIds}
+				loading={historyLoading}
+				emptyText={t('tests.empty')}
+			/>
 			{#if historyLoading}
 				<p class="mt-3 text-sm text-neutral-500">{t('history.refreshing')}</p>
 			{/if}
-			{#if history.length >= 15}
+			{#if historyTotal > 15}
 				<div class="mt-4 flex justify-end">
 					<a
 						class="inline-flex items-center gap-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-medium text-neutral-800 transition hover:border-teal-700 hover:bg-teal-50 hover:text-teal-900"

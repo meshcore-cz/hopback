@@ -3,25 +3,17 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import {
-		AlertCircle,
-		ArrowLeft,
-		CheckCircle2,
-		ChevronLeft,
-		ChevronRight,
-		CircleDashed,
-		Clock3,
-		KeyRound,
-		RotateCw
-	} from '@lucide/svelte';
-	import type { DiagnosticTest, TestStatus } from '$lib/types';
+	import { ArrowLeft, ChevronLeft, ChevronRight, Clock3, RotateCw } from '@lucide/svelte';
+	import type { DiagnosticTest } from '$lib/types';
 	import { apiFetch } from '$lib/client/api';
 	import { t } from '$lib/i18n/index.svelte';
 	import LanguageSwitcher from '$lib/i18n/LanguageSwitcher.svelte';
+	import TestHistoryTable from '$lib/TestHistoryTable.svelte';
 
-	const pageSize = 15;
+	const pageSize = 100;
 
 	let tests = $state<DiagnosticTest[]>([]);
+	let ownTestIds = $state<string[]>([]);
 	let total = $state(0);
 	let loading = $state(false);
 	let error = $state('');
@@ -39,26 +31,21 @@
 		loading = true;
 		error = '';
 		try {
-			const stored = localStorage.getItem('hopback.testIds');
-			const ids = stored ? (JSON.parse(stored) as string[]) : [];
-			if (!Array.isArray(ids) || !ids.length) {
-				tests = [];
-				total = 0;
-				return;
-			}
-			total = ids.length;
-			const pageIds = ids.slice(offset, offset + pageSize);
-			const response = await apiFetch('/api/tests/meta', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ ids: pageIds })
+			ownTestIds = loadLocalTestIds();
+			const query = new URLSearchParams({
+				limit: String(pageSize),
+				offset: String(offset)
 			});
+			if (ownTestIds.length) query.set('ids', ownTestIds.join(','));
+			const response = await apiFetch(`/api/tests?${query}`);
 			const payload = (await response.json()) as {
 				tests?: DiagnosticTest[];
+				total?: number;
 				message?: string;
 			};
 			if (!response.ok) throw new Error(payload.message || t('tests.couldNotLoad'));
 			tests = payload.tests || [];
+			total = payload.total ?? tests.length;
 		} catch (err) {
 			error = err instanceof Error ? err.message : t('tests.couldNotLoad');
 		} finally {
@@ -81,47 +68,16 @@
 		return Math.floor(parsed);
 	}
 
-	function statusMeta(current: TestStatus) {
-		if (current === 'completed')
-			return {
-				icon: CheckCircle2,
-				label: t('status.completed'),
-				className: 'bg-teal-50 text-teal-800'
-			};
-		if (current === 'failed' || current === 'expired')
-			return {
-				icon: AlertCircle,
-				label: t(`status.${current}`),
-				className: 'bg-red-50 text-red-800'
-			};
-		return {
-			icon: CircleDashed,
-			label: t(`status.${current}`),
-			className: 'bg-neutral-100 text-neutral-700'
-		};
-	}
-
-	function totalTime(test: DiagnosticTest) {
-		const unfinished =
-			test.status === 'expired' || test.status === 'failed' ? '—' : t('common.pending');
-		if (!test.returnSeenAt) return unfinished;
-		const start = new Date(test.createdAt).getTime();
-		const end = new Date(test.returnSeenAt).getTime();
-		if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return unfinished;
-		return `${((end - start) / 1000).toFixed(1)} s`;
-	}
-
-	function relativeTime(value?: string | null) {
-		if (!value) return t('common.pending');
-		const date = new Date(value);
-		const delta = Math.floor((Date.now() - date.getTime()) / 1000);
-		if (!Number.isFinite(delta)) return t('common.pending');
-		if (delta < 0) return t('time.justNow');
-		if (delta < 60) return t('time.secondsAgo', { n: delta });
-		if (delta < 3600) return t('time.minutesAgo', { n: Math.floor(delta / 60) });
-		if (delta < 86400) return t('time.hoursAgo', { n: Math.floor(delta / 3600) });
-		if (delta < 604800) return t('time.daysAgo', { n: Math.floor(delta / 86400) });
-		return t('time.weeksAgo', { n: Math.floor(delta / 604800) });
+	function loadLocalTestIds() {
+		try {
+			const stored = localStorage.getItem('hopback.testIds');
+			const parsed = stored ? (JSON.parse(stored) as string[]) : [];
+			return Array.isArray(parsed)
+				? parsed.filter((id) => typeof id === 'string' && id).slice(0, 200)
+				: [];
+		} catch {
+			return [];
+		}
 	}
 </script>
 
@@ -140,7 +96,7 @@
 				<Clock3 size={18} class="text-neutral-500" />
 				<div>
 					<h1 class="text-xl font-semibold text-neutral-950">{t('tests.title')}</h1>
-					<p class="text-sm text-neutral-500">{t('history.saved', { count: total })}</p>
+					<p class="text-sm text-neutral-500">{t('history.visible', { count: total })}</p>
 				</div>
 			</div>
 			<div class="flex items-center gap-2">
@@ -162,65 +118,7 @@
 			</p>
 		{/if}
 
-		<div class="overflow-x-auto">
-			<table class="w-full min-w-[760px] text-left text-sm">
-				<thead class="border-b border-neutral-200 text-xs uppercase text-neutral-500">
-					<tr>
-						<th class="py-2 pr-3 font-semibold">{t('history.col.status')}</th>
-						<th class="px-3 py-2 font-semibold">{t('history.col.endpoint')}</th>
-						<th class="px-3 py-2 font-semibold">{t('history.col.userKey')}</th>
-						<th class="px-3 py-2 font-semibold">{t('history.col.code')}</th>
-						<th class="px-3 py-2 font-semibold">{t('history.col.time')}</th>
-						<th class="px-3 py-2 font-semibold">{t('history.col.observed')}</th>
-					</tr>
-				</thead>
-				<tbody class="divide-y divide-neutral-100">
-					{#each tests as test (test.id)}
-						{@const meta = statusMeta(test.status)}
-						{@const StatusIcon = meta.icon}
-						{@const time = totalTime(test)}
-						<tr
-							class="group cursor-pointer transition hover:bg-neutral-50"
-							onclick={() => goto(resolve('/[id]', { id: test.id }))}
-						>
-							<td class="py-2 pr-3">
-								<span
-									class={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold ${meta.className}`}
-								>
-									<StatusIcon size={13} />
-									{meta.label}
-								</span>
-							</td>
-							<td class="px-3 py-2">
-								<p class="font-medium text-neutral-950 group-hover:text-teal-800">
-									{test.endpointName}
-								</p>
-								<p class="truncate text-xs text-neutral-500">{relativeTime(test.createdAt)}</p>
-							</td>
-							<td class="mono px-3 py-2 text-xs text-neutral-500">
-								<span class="inline-flex items-center gap-1">
-									<KeyRound size={13} />
-									{test.userPublicKey.slice(0, 10)}
-								</span>
-							</td>
-							<td class="mono px-3 py-2 font-semibold text-neutral-800">{test.code}</td>
-							<td class="px-3 py-2 text-neutral-600">
-								<span class={time === 'pending' || time === '—' ? 'opacity-50' : ''}>{time}</span>
-							</td>
-							<td class="px-3 py-2 text-neutral-600">
-								{test.observationCount ?? test.observations.length}
-							</td>
-						</tr>
-					{:else}
-						<tr>
-							<td colspan="6" class="py-5 text-center text-sm text-neutral-500">
-								{loading ? t('tests.loading') : t('tests.empty')}
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
+		<TestHistoryTable {tests} {ownTestIds} {loading} emptyText={t('tests.empty')} />
 
 		<div class="mt-4 flex items-center justify-between gap-3">
 			<p class="text-sm text-neutral-500">

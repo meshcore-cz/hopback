@@ -831,19 +831,15 @@ func (rt *Runtime) handleAnalyzerPacket(w http.ResponseWriter, r *http.Request) 
 }
 
 func (rt *Runtime) handleTestsList(w http.ResponseWriter, r *http.Request) {
-	browserID := r.URL.Query().Get("browserId")
 	limit := intParam(r, "limit", 30, 1, 100)
 	offset := intParam(r, "offset", 0, 0, 100000)
-	if browserID == "" {
-		writeJSON(w, map[string]any{"tests": []Test{}, "total": 0, "limit": limit, "offset": offset})
-		return
-	}
-	tests, err := rt.store.ListTestsForBrowser(browserID, limit, offset, rt.cfg.Endpoints)
+	localIDs := idListParam(r, "ids", 200)
+	tests, err := rt.store.ListVisibleTestMetas(localIDs, limit, offset, rt.cfg.Endpoints)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	total, _ := rt.store.CountTestsForBrowser(browserID)
+	total, _ := rt.store.CountVisibleTests(localIDs)
 	writeJSON(w, map[string]any{"tests": tests, "total": total, "limit": limit, "offset": offset})
 }
 
@@ -2421,6 +2417,23 @@ func intParam(r *http.Request, name string, fallback, minv, maxv int) int {
 	return min(max(n, minv), maxv)
 }
 
+func idListParam(r *http.Request, name string, maxItems int) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, raw := range strings.Split(r.URL.Query().Get(name), ",") {
+		id := strings.TrimSpace(raw)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+		if len(out) >= maxItems {
+			break
+		}
+	}
+	return out
+}
+
 func getenv(name, fallback string) string {
 	if v := os.Getenv(name); v != "" {
 		return v
@@ -2744,6 +2757,49 @@ func (s *Store) ListTestsForBrowser(browserID string, limit, offset int, eps []E
 func (s *Store) CountTestsForBrowser(browserID string) (int, error) {
 	var n int
 	err := s.db.QueryRow(`select count(*) from tests where browser_id=?`, browserID).Scan(&n)
+	return n, err
+}
+
+func visibleTestsWhere(localIDs []string) (string, []any) {
+	where := `exists (select 1 from observations o where o.test_id=tests.id)`
+	args := []any{}
+	if len(localIDs) == 0 {
+		return where, args
+	}
+	qs := strings.TrimRight(strings.Repeat("?,", len(localIDs)), ",")
+	where += ` or id in (` + qs + `)`
+	for _, id := range localIDs {
+		args = append(args, id)
+	}
+	return where, args
+}
+
+func (s *Store) ListVisibleTestMetas(localIDs []string, limit, offset int, eps []Endpoint) ([]Test, error) {
+	where, args := visibleTestsWhere(localIDs)
+	args = append(args, limit, offset)
+	rows, err := s.db.Query(`select `+testColumns+`, (select count(*) from observations o where o.test_id=tests.id) from tests where `+where+` order by created_at desc limit ? offset ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Test{}
+	for rows.Next() {
+		var count int
+		w := &metaScanner{Rows: rows, Count: &count}
+		t, err := s.scanTest(w, eps, false)
+		if err != nil {
+			return nil, err
+		}
+		t.ObservationCount = &count
+		out = append(out, *t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CountVisibleTests(localIDs []string) (int, error) {
+	where, args := visibleTestsWhere(localIDs)
+	var n int
+	err := s.db.QueryRow(`select count(*) from tests where `+where, args...).Scan(&n)
 	return n, err
 }
 

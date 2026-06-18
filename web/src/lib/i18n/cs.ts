@@ -75,6 +75,8 @@ export const cs: Record<MessageKey | string, string> = {
 
 	'history.title': 'Předchozí testy',
 	'history.saved': 'Uloženo v tomto prohlížeči: {count}',
+	'history.visible': 'Viditelné testy: {count}',
+	'history.mine': 'Moje',
 	'history.col.status': 'Stav',
 	'history.col.endpoint': 'Koncový bod',
 	'history.col.date': 'Datum',
@@ -90,7 +92,7 @@ export const cs: Record<MessageKey | string, string> = {
 	'tests.couldNotLoad': 'Testy se nepodařilo načíst.',
 	'tests.prev': 'Předchozí strana',
 	'tests.next': 'Další strana',
-	'tests.empty': 'Zatím žádné testy pro tento prohlížeč.',
+	'tests.empty': 'Zatím žádné viditelné testy.',
 	'tests.loading': 'Načítání testů...',
 
 	'detail.loading': 'Načítání testu {id}…',

@@ -72,6 +72,8 @@ export const en = {
 	// History / tests table
 	'history.title': 'Previous Tests',
 	'history.saved': '{count} saved in this browser',
+	'history.visible': '{count} visible tests',
+	'history.mine': 'Mine',
 	'history.col.status': 'Status',
 	'history.col.endpoint': 'Endpoint',
 	'history.col.date': 'Date',
@@ -87,7 +89,7 @@ export const en = {
 	'tests.couldNotLoad': 'Could not load tests.',
 	'tests.prev': 'Previous page',
 	'tests.next': 'Next page',
-	'tests.empty': 'No tests for this browser yet.',
+	'tests.empty': 'No visible tests yet.',
 	'tests.loading': 'Loading tests...',
 
 	// Detail page
