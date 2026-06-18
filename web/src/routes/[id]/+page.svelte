@@ -351,10 +351,16 @@
 		return Math.min(...items.map((item) => item.hopCount)).toString();
 	}
 
-	// Classifies a set of observations of the *same* packet by how it reached the
-	// observers: direct (0 hops only), flood (multi-hop only), or mixed (both seen).
+	// Classifies a set of observations by the routing method the packet was sent
+	// with (from the packet header). Falls back to hop-count inference only for
+	// legacy observations recorded before the header route was captured.
 	function routeKindOf(items: PacketObservation[]) {
 		if (!items.length) return null;
+		const routes = new Set(items.map((item) => item.route).filter(Boolean));
+		if (routes.size) {
+			if (routes.size > 1) return t('route.kind.mixed');
+			return routes.has('direct') ? t('route.kind.direct') : t('route.kind.flood');
+		}
 		const direct = items.some((item) => item.hopCount === 0);
 		const flood = items.some((item) => item.hopCount > 0);
 		if (direct && flood) return t('route.kind.mixed');
@@ -546,8 +552,13 @@
 				endpointMessage?.createdAt || current.outboundEndpointSeenAt
 			);
 		}
+		// Anchor to when the endpoint actually broadcast the reply, not the first
+		// time a (possibly distant) observer saw it: the reply ACK is captured by the
+		// local endpoint agent before remote observers see the reply flooding, so
+		// firstMessage can be later than firstAck and yield a bogus negative span.
 		const firstAck = firstObservation(acks);
-		return duration(firstMessage?.createdAt, firstAck?.createdAt || current.replyAckSeenAt);
+		const replyStart = current.replyBroadcastAt || firstMessage?.createdAt;
+		return duration(replyStart, firstAck?.createdAt || current.replyAckSeenAt);
 	}
 
 	function packetHashButtonLabel(hash: string) {

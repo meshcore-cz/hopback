@@ -32,12 +32,14 @@ dev:
 	npm run dev -- --host $(HOST) --port $(PORT)
 
 server:
+	npm run build:server
 	npm run dev:server
 
 start:
 	HOST=$(HOST) PORT=$(PORT) npm run start
 
 agent:
+	npm run build:agent
 	npm run agent
 
 stack:

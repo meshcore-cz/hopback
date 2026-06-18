@@ -4,6 +4,12 @@ service:
   verbose: false
   autoReply: true
   testTtlMinutes: 20
+  # Keep capturing packets for at least this many minutes after a test's first
+  # packet is seen, even after it completes (captures late flood retransmissions).
+  monitorWindowMinutes: 15
+  # Re-send the endpoint reply as a flood if a direct-routed reply isn't ACKed
+  # within this many seconds, so a stale path never loses the message. 0 disables.
+  replyFloodFallbackSeconds: 8
   agentSecret: change-this-secret
   # privateKey: 128hex-private-key
   # publicKey: 64hex-public-key

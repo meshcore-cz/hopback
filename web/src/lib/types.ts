@@ -108,6 +108,8 @@ export interface PacketObservation {
 	pathKeys: (string | null)[];
 	distanceKm?: number | null;
 	decodedType?: string | null;
+	/** Packet header routing method: how the packet was actually sent. */
+	route?: 'direct' | 'flood' | null;
 	createdAt: string;
 }
 

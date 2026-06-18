@@ -34,12 +34,35 @@ import (
 )
 
 const (
-	packetQueueSize = 4096
-	maxPacketSeen   = 20000
+	packetQueueSize = 65536 // inbound packets awaiting decode/match
+	dbQueueSize     = 65536 // observation/fact writes awaiting persistence
+	clientQueueSize = 4096  // per-browser outbound websocket messages
+	tsMillis        = "2006-01-02T15:04:05.000Z07:00"
 )
 
 //go:embed all:frontend
 var frontendFiles embed.FS
+
+// cloneFacts copies a fact map into independent values so an async DB write can
+// hold it without aliasing a Test struct that the publish path may still mutate.
+func cloneFacts(f map[string]*string) map[string]*string {
+	out := make(map[string]*string, len(f))
+	for k, v := range f {
+		if v != nil {
+			s := *v
+			out[k] = &s
+		}
+	}
+	return out
+}
+
+// publishCopy returns an independent Test struct for the publish path. decorate
+// owns the maps/slices it mutates, so a shallow struct copy is enough here to
+// keep its field reassignments off the live test.
+func publishCopy(t *Test) *Test {
+	cp := *t
+	return &cp
+}
 
 type Config struct {
 	Service struct {
@@ -48,9 +71,17 @@ type Config struct {
 		Verbose        bool   `yaml:"verbose"`
 		AutoReply      *bool  `yaml:"autoReply"`
 		TestTTLMinutes int    `yaml:"testTtlMinutes"`
-		PrivateKey     string `yaml:"privateKey"`
-		PublicKey      string `yaml:"publicKey"`
-		AgentSecret    string `yaml:"agentSecret"`
+		// MonitorWindowMinutes is the minimum time we keep capturing packets for a
+		// test after its first packet is seen, regardless of whether it already
+		// completed. Ensures late flood retransmissions are fully captured.
+		MonitorWindowMinutes int `yaml:"monitorWindowMinutes"`
+		// ReplyFloodFallbackSeconds is how long we wait after a direct-routed reply
+		// before re-sending it as a flood when no reply-ACK has been observed, so a
+		// stale path never loses the message. Zero disables the fallback.
+		ReplyFloodFallbackSeconds int    `yaml:"replyFloodFallbackSeconds"`
+		PrivateKey                string `yaml:"privateKey"`
+		PublicKey                 string `yaml:"publicKey"`
+		AgentSecret               string `yaml:"agentSecret"`
 	} `yaml:"service"`
 	CoreScope struct {
 		URLs            []string `yaml:"urls"`
@@ -175,7 +206,10 @@ type Observation struct {
 	PathKeys     []*string `json:"pathKeys"`
 	DistanceKm   *float64  `json:"distanceKm,omitempty"`
 	DecodedType  *string   `json:"decodedType,omitempty"`
-	CreatedAt    string    `json:"createdAt"`
+	// Route is the packet header's routing method ("direct" or "flood"), i.e. how
+	// the packet was actually sent — not inferred from hop counts.
+	Route     *string `json:"route,omitempty"`
+	CreatedAt string  `json:"createdAt"`
 }
 
 type NodeRecord struct {
@@ -269,13 +303,25 @@ type Runtime struct {
 	observers map[string]ObserverRecord
 	active    map[string]*ActiveTest
 	index     ActiveIndex
-	seen      map[string]time.Time
+	dbCh      chan func(dbExec) error
 	mu        sync.RWMutex
+}
+
+// dbExec is satisfied by both *sql.DB and *sql.Tx, letting a write run either
+// standalone or as part of a batched transaction.
+type dbExec interface {
+	Exec(query string, args ...any) (sql.Result, error)
 }
 
 type ActiveTest struct {
 	Test *Test
 	Keys map[string]bool
+	// FirstPacketAt is the RFC3339 (UTC) time the first packet for this test was
+	// observed. Empty until the first packet arrives. Anchors the monitor window.
+	FirstPacketAt string
+	// ReplyFallbackSent guards the one-shot flood re-send of a direct reply that
+	// went unacknowledged.
+	ReplyFallbackSent bool
 }
 
 type ActiveIndex struct {
@@ -293,6 +339,7 @@ type PacketEvent struct {
 	Source       string
 	RawHex       string
 	Hash         string
+	ReceivedAt   time.Time
 	ObserverID   *string
 	ObserverName *string
 	Timestamp    *string
@@ -307,7 +354,61 @@ type PacketEvent struct {
 type BrowserClient struct {
 	conn      *websocket.Conn
 	browserID string
+	subsMu    sync.RWMutex
 	testIDs   map[string]bool
+	out       chan any
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+// send queues a message for the client's write pump. It never blocks the caller:
+// if a slow browser can't keep up, the oldest queued messages are dropped (the
+// client re-fetches full state on its next reload). This keeps one slow socket
+// from stalling the whole packet pipeline.
+func (c *BrowserClient) send(v any) {
+	for {
+		select {
+		case c.out <- v:
+			return
+		case <-c.closed:
+			return
+		default:
+			select { // make room by dropping the oldest queued message
+			case <-c.out:
+			default:
+			}
+		}
+	}
+}
+
+// writePump owns all writes to the websocket. Gorilla allows only one concurrent
+// writer, so funnelling every write through this single goroutine is what makes
+// concurrent send() calls safe.
+func (c *BrowserClient) writePump() {
+	for {
+		select {
+		case v := <-c.out:
+			if err := c.conn.WriteJSON(v); err != nil {
+				return
+			}
+		case <-c.closed:
+			return
+		}
+	}
+}
+
+func (c *BrowserClient) close() { c.closeOnce.Do(func() { close(c.closed) }) }
+
+func (c *BrowserClient) subscribe(testID string) {
+	c.subsMu.Lock()
+	c.testIDs[testID] = true
+	c.subsMu.Unlock()
+}
+
+func (c *BrowserClient) subscribed(testID string) bool {
+	c.subsMu.RLock()
+	defer c.subsMu.RUnlock()
+	return c.testIDs[testID]
 }
 
 type AgentClient struct {
@@ -317,6 +418,13 @@ type AgentClient struct {
 	IPCReady    bool
 	ConnectedAt string
 	LastSeenAt  string
+	writeMu     sync.Mutex
+}
+
+func (a *AgentClient) send(v any) error {
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
+	return a.conn.WriteJSON(v)
 }
 
 type ObserverRecord struct {
@@ -373,6 +481,12 @@ func loadConfig(path string) (Config, error) {
 	if cfg.Service.TestTTLMinutes == 0 {
 		cfg.Service.TestTTLMinutes = 20
 	}
+	if cfg.Service.MonitorWindowMinutes == 0 {
+		cfg.Service.MonitorWindowMinutes = 15
+	}
+	if cfg.Service.ReplyFloodFallbackSeconds == 0 {
+		cfg.Service.ReplyFloodFallbackSeconds = 8
+	}
 	if len(cfg.CoreScope.URLs) == 0 {
 		cfg.CoreScope.URLs = []string{"wss://analyzer.meshcore.cz", "wss://mc.pp0.co"}
 	}
@@ -421,7 +535,7 @@ func openStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on")
+	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=on")
 	if err != nil {
 		return nil, err
 	}
@@ -478,6 +592,7 @@ func (s *Store) migrate() error {
 		path_json text not null,
 		path_keys_json text not null default '[]',
 		decoded_type text,
+		route text,
 		created_at text not null
 	);
 	create table if not exists nodes (
@@ -496,7 +611,13 @@ func (s *Store) migrate() error {
 	create index if not exists nodes_name_idx on nodes(name);
 	create index if not exists observations_packet_observer_path_idx on observations(test_id, packet_hash, direction, source, observer_id, path_json);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Best-effort column add for databases created before `route` existed; the
+	// error when it already exists is expected and ignored.
+	_, _ = s.db.Exec(`alter table observations add column route text`)
+	return nil
 }
 
 func NewRuntime(cfg Config, store *Store) (*Runtime, error) {
@@ -510,7 +631,7 @@ func NewRuntime(cfg Config, store *Store) (*Runtime, error) {
 		analyzers: map[string]AnalyzerState{},
 		observers: map[string]ObserverRecord{},
 		active:    map[string]*ActiveTest{},
-		seen:      map[string]time.Time{},
+		dbCh:      make(chan func(dbExec) error, dbQueueSize),
 	}
 	tests, err := store.ListActiveTests(cfg.Endpoints)
 	if err != nil {
@@ -523,9 +644,10 @@ func NewRuntime(cfg Config, store *Store) (*Runtime, error) {
 }
 
 func (rt *Runtime) Start() {
-	for i := 0; i < max(2, min(8, len(rt.cfg.Endpoints)*2)); i++ {
-		go rt.packetWorker()
-	}
+	// One ordered packet worker (decode + match only — the heavy work is offloaded)
+	// and one DB writer keep the pipeline simple and deterministic.
+	go rt.packetWorker()
+	go rt.dbWriter()
 	go rt.cleanupLoop()
 	go rt.refreshNodesLoop()
 	go rt.refreshObserversLoop()
@@ -548,13 +670,37 @@ func (rt *Runtime) cleanupLoop() {
 			}
 		}
 		rt.rebuildIndexLocked()
-		now := time.Now()
-		for key, seen := range rt.seen {
-			if now.Sub(seen) > 10*time.Minute || len(rt.seen) > maxPacketSeen {
-				delete(rt.seen, key)
+		rt.mu.Unlock()
+	}
+}
+
+// dbWriter persists observations and fact updates off the packet worker's hot
+// path. Writes are batched into a single transaction per drain so a burst of
+// dozens of packets costs one commit instead of dozens.
+func (rt *Runtime) dbWriter() {
+	for job := range rt.dbCh {
+		batch := []func(dbExec) error{job}
+		for len(batch) < 512 {
+			select {
+			case j := <-rt.dbCh:
+				batch = append(batch, j)
+			default:
+				goto run
 			}
 		}
-		rt.mu.Unlock()
+	run:
+		rt.store.runBatch(batch)
+	}
+}
+
+// enqueueWrite hands a DB write to the async writer without blocking. If the
+// queue is somehow saturated it falls back to a synchronous write rather than
+// losing the record.
+func (rt *Runtime) enqueueWrite(job func(dbExec) error) {
+	select {
+	case rt.dbCh <- job:
+	default:
+		rt.store.runBatch([]func(dbExec) error{job})
 	}
 }
 
@@ -772,9 +918,16 @@ func (rt *Runtime) getTest(id string) (*Test, error) {
 }
 
 func (rt *Runtime) decorate(t *Test) *Test {
-	if t.Nodes == nil {
-		t.Nodes = map[string]NodeRef{}
-	}
+	// decorate mutates Nodes and per-observation fields, so it must own that data.
+	// Callers pass shallow copies of the live test, which still alias its Nodes map
+	// and Observations backing array; give this call independent copies so two
+	// goroutines decorating concurrently never touch the same map/slice.
+	t.Nodes = map[string]NodeRef{}
+	// make+copy (not append) so an empty observation list stays a non-nil slice
+	// and marshals as [] rather than null, which the frontend filters over.
+	obs := make([]Observation, len(t.Observations))
+	copy(obs, t.Observations)
+	t.Observations = obs
 	for i := range t.Observations {
 		if t.Observations[i].Path == nil {
 			t.Observations[i].Path = []string{}
@@ -798,6 +951,12 @@ func (rt *Runtime) resolveObservationNodes(t *Test) {
 			keys = append(keys, *obs.ObserverID)
 		}
 		keys = append(keys, obs.Path...)
+		// The full pubkeys CoreScope resolved are the best lookup keys for hops.
+		for _, pk := range obs.PathKeys {
+			if pk != nil {
+				keys = append(keys, *pk)
+			}
+		}
 	}
 	nodes, _ := rt.store.LookupNodes(keys)
 	for key, node := range nodes {
@@ -810,8 +969,25 @@ func (rt *Runtime) resolveObservationNodes(t *Test) {
 				obs.ObserverKey = &key
 			}
 		}
+		hints := obs.PathKeys
 		obs.PathKeys = make([]*string, len(obs.Path))
 		for j, hop := range obs.Path {
+			// Prefer the full pubkey CoreScope already resolved for this hop; only
+			// fall back to short-prefix matching for agent-observed hops.
+			if j < len(hints) && hints[j] != nil && strings.TrimSpace(*hints[j]) != "" {
+				hint := strings.ToLower(strings.TrimSpace(*hints[j]))
+				key := nodeKey(hint, nodes)
+				if key == "" {
+					// CoreScope knows the pubkey even though it's not in our node DB:
+					// register a minimal node so the name/link still resolve.
+					key = hint
+					if _, ok := t.Nodes[key]; !ok {
+						t.Nodes[key] = NodeRef{PublicKey: hint, Name: "Node " + shortLabel(hint), ShortHash: hop}
+					}
+				}
+				obs.PathKeys[j] = &key
+				continue
+			}
 			if key := nodeKey(hop, nodes); key != "" {
 				obs.PathKeys[j] = &key
 			}
@@ -943,47 +1119,81 @@ func (rt *Runtime) edgeRow(t *Test, direction, edge string) DeliveryPathRow {
 	}
 }
 
+// maxMapDistanceKm bounds how far a node can sit from the endpoint and still be
+// drawn on the propagation map. Nodes resolved to bogus/distant coordinates would
+// otherwise stretch the map across the globe.
+const maxMapDistanceKm = 2000
+
+// endpointCoords returns the endpoint's [lat, lon] for distance filtering, or nil.
+func (rt *Runtime) endpointCoords(t *Test) *[2]float64 {
+	var lat, lon *float64
+	if t.EndpointLocation != nil {
+		lat, lon = t.EndpointLocation.Lat, t.EndpointLocation.Lon
+	}
+	if !hasCoords(lat, lon) {
+		node := t.Nodes[strings.ToLower(t.EndpointPublicKey)]
+		lat, lon = node.Lat, node.Lon
+	}
+	if !hasCoords(lat, lon) {
+		return nil
+	}
+	return &[2]float64{*lat, *lon}
+}
+
 func (rt *Runtime) propagationMap(t *Test) *PropagationMapData {
 	out := &PropagationMapData{Points: []PropagationMapPoint{}, Segments: []PropagationMapSegment{}}
-	points := map[string]bool{}
-	addPoint := func(row DeliveryPathRow, kind string) {
-		if !hasCoords(row.Lat, row.Lon) || points[row.Key] {
+	endpoint := rt.endpointCoords(t)
+	// tooFar reports whether a coordinate is beyond the map radius from the endpoint.
+	tooFar := func(lat, lon float64) bool {
+		return endpoint != nil && haversineKm(endpoint[0], endpoint[1], lat, lon) > maxMapDistanceKm
+	}
+	seen := map[string]bool{}
+	addPoint := func(key, name, kind string, pub *string, lat, lon *float64) {
+		if !hasCoords(lat, lon) || tooFar(*lat, *lon) || seen[key] {
 			return
 		}
-		points[row.Key] = true
-		out.Points = append(out.Points, PropagationMapPoint{
-			Key:       row.Key,
-			Name:      row.Name,
-			Kind:      kind,
-			PublicKey: row.PublicKey,
-			Lat:       *row.Lat,
-			Lon:       *row.Lon,
-		})
+		seen[key] = true
+		out.Points = append(out.Points, PropagationMapPoint{Key: key, Name: name, Kind: kind, PublicKey: pub, Lat: *lat, Lon: *lon})
 	}
 	for _, obs := range t.Observations {
-		rows := rt.deliveryRows(t, obs)
-		for i, row := range rows {
-			kind := "node"
-			if i == 0 || i == len(rows)-1 {
-				kind = "endpoint"
+		// Connect only consecutive relay hops that the packet actually traversed.
+		// The endpoint and user are the source/destination, not path relays, so we
+		// never synthesize a line to them — that would invent edges that don't exist.
+		// A hop without coordinates (or out of range) breaks the chain, no bridging.
+		var prevLat, prevLon *float64
+		for i, hop := range obs.Path {
+			key := hop
+			if i < len(obs.PathKeys) && obs.PathKeys[i] != nil {
+				key = *obs.PathKeys[i]
 			}
-			addPoint(row, kind)
+			node := t.Nodes[key]
+			if !hasCoords(node.Lat, node.Lon) || tooFar(*node.Lat, *node.Lon) {
+				prevLat, prevLon = nil, nil
+				continue
+			}
+			addPoint("node:"+firstNonEmpty(node.PublicKey, key), firstNonEmpty(node.Name, hop), "node", ptrIf(node.PublicKey), node.Lat, node.Lon)
+			if prevLat != nil {
+				out.Segments = append(out.Segments, PropagationMapSegment{
+					Key:       fmt.Sprintf("%s:%d:%s", obs.Direction, i, obs.PacketHash),
+					Direction: obs.Direction,
+					Kind:      packetKind(obs),
+					From:      [2]float64{*prevLat, *prevLon},
+					To:        [2]float64{*node.Lat, *node.Lon},
+				})
+			}
+			prevLat, prevLon = node.Lat, node.Lon
 		}
 		if obs.ObserverKey != nil {
 			if node := t.Nodes[*obs.ObserverKey]; hasCoords(node.Lat, node.Lon) {
-				addPoint(DeliveryPathRow{Key: "observer:" + *obs.ObserverKey, Name: firstNonEmpty(strVal(obs.ObserverName), node.Name), PublicKey: ptrIf(node.PublicKey), Lat: node.Lat, Lon: node.Lon}, "observer")
+				addPoint("observer:"+*obs.ObserverKey, firstNonEmpty(strVal(obs.ObserverName), node.Name), "observer", ptrIf(node.PublicKey), node.Lat, node.Lon)
 			}
 		}
-		coords := rowsWithCoords(rows)
-		for i := 1; i < len(coords); i++ {
-			out.Segments = append(out.Segments, PropagationMapSegment{
-				Key:       fmt.Sprintf("%s:%d:%s", obs.Direction, i, obs.PacketHash),
-				Direction: obs.Direction,
-				Kind:      packetKind(obs),
-				From:      [2]float64{*coords[i-1].Lat, *coords[i-1].Lon},
-				To:        [2]float64{*coords[i].Lat, *coords[i].Lon},
-			})
-		}
+	}
+	// The endpoint is a standalone marker, not wired into the relay chain.
+	if endpoint != nil {
+		node := t.Nodes[strings.ToLower(t.EndpointPublicKey)]
+		epKey := t.EndpointPublicKey
+		addPoint("endpoint:"+epKey, firstNonEmpty(node.Name, t.EndpointName), "endpoint", &epKey, &endpoint[0], &endpoint[1])
 	}
 	return out
 }
@@ -1046,16 +1256,6 @@ func (rt *Runtime) pathCoordinatePoints(t *Test, obs Observation) [][2]float64 {
 	return out
 }
 
-func rowsWithCoords(rows []DeliveryPathRow) []DeliveryPathRow {
-	out := []DeliveryPathRow{}
-	for _, row := range rows {
-		if hasCoords(row.Lat, row.Lon) {
-			out = append(out, row)
-		}
-	}
-	return out
-}
-
 func nodeKey(value string, nodes map[string]NodeRef) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
@@ -1070,6 +1270,17 @@ func nodeKey(value string, nodes map[string]NodeRef) string {
 		}
 	}
 	return ""
+}
+
+// routeLabel maps a packet header's route type to the way it was sent. Both
+// transport variants collapse to their base method.
+func routeLabel(r meshpkt.RouteType) string {
+	switch r {
+	case meshpkt.RouteDirect, meshpkt.RouteTransportDirect:
+		return "direct"
+	default:
+		return "flood"
+	}
 }
 
 func hasCoords(lat, lon *float64) bool {
@@ -1126,6 +1337,11 @@ func (rt *Runtime) registerActiveLocked(t *Test) {
 	active := &ActiveTest{Test: t, Keys: map[string]bool{}}
 	for _, o := range t.Observations {
 		active.Keys[observationKey(o)] = true
+		// Observations are stored newest-first, so the last one is the oldest:
+		// anchor the monitor window to the genuine first packet time.
+		if o.CreatedAt != "" {
+			active.FirstPacketAt = o.CreatedAt
+		}
 	}
 	rt.active[t.ID] = active
 	rt.rebuildIndexLocked()
@@ -1156,14 +1372,21 @@ func (rt *Runtime) handleBrowserWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	client := &BrowserClient{conn: conn, browserID: r.URL.Query().Get("browserId"), testIDs: map[string]bool{}}
+	client := &BrowserClient{
+		conn:      conn,
+		browserID: r.URL.Query().Get("browserId"),
+		testIDs:   map[string]bool{},
+		out:       make(chan any, clientQueueSize),
+		closed:    make(chan struct{}),
+	}
 	if client.browserID == "" {
 		client.browserID = "anonymous"
 	}
+	go client.writePump()
 	rt.mu.Lock()
 	rt.browsers[client] = true
 	rt.mu.Unlock()
-	_ = conn.WriteJSON(map[string]any{"type": "hello", "status": rt.Status()})
+	client.send(map[string]any{"type": "hello", "status": rt.Status()})
 	for {
 		var msg struct {
 			Type   string `json:"type"`
@@ -1173,15 +1396,16 @@ func (rt *Runtime) handleBrowserWS(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if msg.Type == "subscribe" && msg.TestID != "" {
-			client.testIDs[msg.TestID] = true
+			client.subscribe(msg.TestID)
 			if t, _ := rt.getTest(msg.TestID); t != nil {
-				_ = conn.WriteJSON(map[string]any{"type": "testUpdated", "test": t})
+				client.send(map[string]any{"type": "testUpdated", "test": t})
 			}
 		}
 	}
 	rt.mu.Lock()
 	delete(rt.browsers, client)
 	rt.mu.Unlock()
+	client.close()
 	_ = conn.Close()
 }
 
@@ -1203,7 +1427,7 @@ func (rt *Runtime) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	rt.mu.Lock()
 	rt.agents[id] = agent
 	rt.mu.Unlock()
-	_ = conn.WriteJSON(map[string]any{"type": "hello", "id": id, "status": rt.Status()})
+	_ = agent.send(map[string]any{"type": "hello", "id": id, "status": rt.Status()})
 	rt.publishStatus()
 	for {
 		var raw json.RawMessage
@@ -1280,6 +1504,9 @@ func (rt *Runtime) handleAgentMessage(agent *AgentClient, raw json.RawMessage) {
 }
 
 func (rt *Runtime) enqueuePacket(packet PacketEvent) {
+	if packet.ReceivedAt.IsZero() {
+		packet.ReceivedAt = time.Now()
+	}
 	rt.mu.RLock()
 	active := len(rt.active)
 	rt.mu.RUnlock()
@@ -1289,9 +1516,7 @@ func (rt *Runtime) enqueuePacket(packet PacketEvent) {
 	select {
 	case rt.packetCh <- packet:
 	default:
-		if strings.HasPrefix(packet.Source, "agent:") {
-			rt.packetCh <- packet
-		}
+		log.Printf("[runtime] packet queue full, dropping packet from %s", packet.Source)
 	}
 }
 
@@ -1310,19 +1535,13 @@ func (rt *Runtime) processPacket(event PacketEvent) {
 	if err != nil {
 		return
 	}
-	hash := event.Hash
-	if hash == "" {
+	if event.Hash == "" {
 		h := meshpkt.ContentHash(pkt)
-		hash = hex.EncodeToString(h[:])
-		event.Hash = hash
+		event.Hash = hex.EncodeToString(h[:])
 	}
-	rt.mu.Lock()
-	if _, ok := rt.seen[event.Source+"|"+hash]; ok {
-		rt.mu.Unlock()
-		return
-	}
-	rt.seen[event.Source+"|"+hash] = time.Now()
-	rt.mu.Unlock()
+	// No content-hash gate here: every observer's copy of a flooded packet is a
+	// distinct observation we want to keep. Genuine duplicates (same observer,
+	// same path) are filtered by the per-observation key in recordPacket.
 
 	if pkt.Type == meshpkt.PayloadAck {
 		crc, err := meshpkt.DecodeAckPayload(pkt.Payload)
@@ -1441,15 +1660,35 @@ func (rt *Runtime) recordPacket(event PacketEvent, testID, direction, typ string
 		rt.mu.Unlock()
 		return false
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	// Stamp the observation with when the packet was captured, at millisecond
+	// precision, so bursts arriving inside the same second keep their order.
+	captured := event.ReceivedAt
+	if captured.IsZero() {
+		captured = time.Now()
+	}
+	now := captured.UTC().Format(tsMillis)
 	path := event.Path
 	if len(path) == 0 && pkt != nil {
 		for _, hop := range pkt.Hops() {
 			path = append(path, hex.EncodeToString(hop))
 		}
 	}
+	// Seed per-hop keys with the full pubkeys CoreScope already resolved for this
+	// path (resolved_path runs parallel to path). Agent-observed hops only carry
+	// the short prefix, which is left to short-hash matching later.
 	pathKeys := make([]*string, len(path))
-	obs := Observation{ID: -int64(len(active.Test.Observations) + 1), Direction: direction, Source: event.Source, PacketHash: event.Hash, ObserverID: event.ObserverID, ObserverName: event.ObserverName, HopCount: len(path), Path: path, PathKeys: pathKeys, DecodedType: ptr(typ), CreatedAt: now}
+	for i := range path {
+		if i < len(event.ResolvedPath) {
+			if pk := strings.ToLower(strings.TrimSpace(event.ResolvedPath[i])); pk != "" && !strings.EqualFold(pk, path[i]) {
+				pathKeys[i] = &pk
+			}
+		}
+	}
+	var routeKind *string
+	if pkt != nil {
+		routeKind = ptr(routeLabel(pkt.Route))
+	}
+	obs := Observation{ID: -int64(len(active.Test.Observations) + 1), Direction: direction, Source: event.Source, PacketHash: event.Hash, ObserverID: event.ObserverID, ObserverName: event.ObserverName, HopCount: len(path), Path: path, PathKeys: pathKeys, DecodedType: ptr(typ), Route: routeKind, CreatedAt: now}
 	key := observationKey(obs)
 	if active.Keys[key] {
 		rt.mu.Unlock()
@@ -1458,18 +1697,47 @@ func (rt *Runtime) recordPacket(event PacketEvent, testID, direction, typ string
 	active.Keys[key] = true
 	active.Test.Observations = append([]Observation{obs}, active.Test.Observations...)
 	rt.applyFactsLocked(active.Test, obs, event.RawHex)
-	rt.rebuildIndexLocked()
-	testCopy := *active.Test
-	facts := activeFacts(active.Test)
+	// Keep capturing for at least the monitor window after the first packet for
+	// this test, regardless of whether it already completed. This guarantees we
+	// record late flood retransmissions instead of dropping them at the
+	// creation-time TTL.
+	var extendedExpiry string
+	if active.FirstPacketAt == "" {
+		active.FirstPacketAt = obs.CreatedAt
+		window := time.Duration(rt.cfg.Service.MonitorWindowMinutes) * time.Minute
+		deadline := time.Now().UTC().Add(window).Format(time.RFC3339)
+		if deadline > active.Test.ExpiresAt {
+			active.Test.ExpiresAt = deadline
+			extendedExpiry = deadline
+		}
+	}
+	// Observations never change the routing index (it keys on test pubkeys/CRCs),
+	// so no rebuild is needed here.
+	facts := cloneFacts(activeFacts(active.Test))
+	pubCopy := publishCopy(active.Test)
 	rt.mu.Unlock()
 
-	if err := rt.store.AddObservation(testID, obs); err != nil {
-		log.Printf("[runtime] store observation failed for test %s: %v", testID, err)
+	rt.enqueueWrite(func(e dbExec) error {
+		if err := rt.store.AddObservation(e, testID, obs); err != nil {
+			return err
+		}
+		if err := rt.store.UpdateFacts(e, testID, facts); err != nil {
+			return err
+		}
+		if extendedExpiry != "" {
+			return rt.store.UpdateExpiry(e, testID, extendedExpiry)
+		}
+		return nil
+	})
+	// Publish the decorated observation (resolved, non-nil path/pathKeys/observerKey)
+	// rather than the raw one — the client renders the pushed observation directly,
+	// and a nil path would crash its handler. It's the first entry (prepended).
+	dt := rt.decorate(pubCopy)
+	pushObs := obs
+	if len(dt.Observations) > 0 {
+		pushObs = dt.Observations[0]
 	}
-	if err := rt.store.UpdateFacts(testID, facts); err != nil {
-		log.Printf("[runtime] store facts failed for test %s: %v", testID, err)
-	}
-	rt.publishObservation(rt.decorate(&testCopy), obs)
+	rt.publishObservation(dt, pushObs)
 	return true
 }
 
@@ -1533,7 +1801,7 @@ func (rt *Runtime) sendReply(t *Test) {
 		if p.Role == "replyMessage" && t.ReplyBroadcastAt != nil {
 			continue
 		}
-		_ = agent.conn.WriteJSON(map[string]any{"type": "sendRaw", "testId": t.ID, "packetRole": p.Role, "rawHex": p.Hex})
+		_ = agent.send(map[string]any{"type": "sendRaw", "testId": t.ID, "packetRole": p.Role, "rawHex": p.Hex})
 		rt.noteQueuedPacket(t.ID, p)
 		return
 	}
@@ -1565,51 +1833,100 @@ func (rt *Runtime) buildReplyPackets(t *Test) ([]OutPacket, error) {
 	}
 	text := decoded.Text
 	ts := uint32(time.Now().Unix())
+	// The recipient's ACK CRC must be computed over the SAME timestamp and attempt
+	// the sender used; otherwise the sender's app won't recognise the ACK. The
+	// attempt is the low 2 bits of the message flags (0 for a first send), so we
+	// must read it from the decoded outbound packet rather than assuming a value.
+	attempt := byte(0)
 	if d, err := decodeOutboundText(pkt, ep.PrivateKey, t.UserPublicKey); err == nil {
 		ts = uint32(d.Timestamp.Unix())
 		text = d.Text
+		attempt = d.Attempt
 	}
 	userPub, _ := hex.DecodeString(t.UserPublicKey)
-	crc := meshpkt.TextAckCRC(ts, 1, text, userPub)
+	crc := meshpkt.TextAckCRC(ts, attempt, text, userPub)
 	out := []OutPacket{}
 	if pkt.HopCount() > 0 {
 		var ack []byte
 		if len(ep.PrivateKey) == 128 {
-			ack, err = meshpkt.PathTextAckReturnPacketFromExpanded(ep.PrivateKey, ep.PublicKey, t.UserPublicKey, ts, 1, text, pkt.Path, meshpkt.WithPathHashSize(pkt.PathHashSize))
+			ack, err = meshpkt.PathTextAckReturnPacketFromExpanded(ep.PrivateKey, ep.PublicKey, t.UserPublicKey, ts, attempt, text, pkt.Path, meshpkt.WithPathHashSize(pkt.PathHashSize))
 		} else {
 			var seed [32]byte
 			b, _ := hex.DecodeString(ep.PrivateKey[:64])
 			copy(seed[:], b)
 			var peer [32]byte
 			copy(peer[:], userPub)
-			ack, err = meshpkt.PathTextAckReturnPacketFromIdentity(seed, peer, ts, 1, text, pkt.Path, meshpkt.WithPathHashSize(pkt.PathHashSize))
+			ack, err = meshpkt.PathTextAckReturnPacketFromIdentity(seed, peer, ts, attempt, text, pkt.Path, meshpkt.WithPathHashSize(pkt.PathHashSize))
 		}
 		if err == nil {
 			out = append(out, rt.outPacket("outboundAck", ack, fmt.Sprintf("%08x", crc)))
 		}
 	} else {
-		ack, err := meshpkt.TextAckPacket(ts, 1, text, userPub)
+		ack, err := meshpkt.TextAckPacket(ts, attempt, text, userPub)
 		if err == nil {
 			out = append(out, rt.outPacket("outboundAck", ack, fmt.Sprintf("%08x", crc)))
 		}
 	}
-	replyText := "Hopback " + t.Code + " received by " + t.EndpointName
-	var reply []byte
-	if len(ep.PrivateKey) == 128 {
-		reply, err = meshpkt.DirectTextPacketFromExpanded(ep.PrivateKey, ep.PublicKey, t.UserPublicKey, replyText, time.Now(), 1)
-	} else {
-		var seed [32]byte
-		b, _ := hex.DecodeString(ep.PrivateKey[:64])
-		copy(seed[:], b)
-		var peer [32]byte
-		copy(peer[:], userPub)
-		reply, err = meshpkt.DirectTextPacketFromIdentity(seed, peer, replyText, time.Now(), 1)
-	}
-	if err == nil {
-		replyCRC := meshpkt.TextAckCRC(uint32(time.Now().Unix()), 1, replyText, mustHex(ep.PublicKey))
-		out = append(out, rt.outPacket("replyMessage", reply, fmt.Sprintf("%08x", replyCRC)))
+	// Send the reply DIRECT (unicast) back along the reversed inbound path when the
+	// message took relays to reach us; a direct neighbour (0 hops) has no path to
+	// follow, so it floods. A flood fallback (see replyFloodFallback) covers a
+	// stale direct path so the message is never lost.
+	if rm, err := rt.buildReplyMessage(ep, t, &pkt); err == nil {
+		out = append(out, rm)
 	}
 	return out, nil
+}
+
+// reversePath reverses the hop order of a MeshCore path. The path is a flat byte
+// slice of fixed-size hop hashes, so it's reversed in hashSize-byte chunks (the
+// bytes within each hop keep their order).
+func reversePath(path []byte, hashSize int) []byte {
+	if hashSize <= 0 || len(path) == 0 || len(path)%hashSize != 0 {
+		return path
+	}
+	n := len(path) / hashSize
+	out := make([]byte, len(path))
+	for i := 0; i < n; i++ {
+		copy(out[i*hashSize:(i+1)*hashSize], path[(n-1-i)*hashSize:(n-i)*hashSize])
+	}
+	return out
+}
+
+// buildReplyMessage builds the endpoint's "received" reply. With a multi-hop
+// inbound packet it routes DIRECT along the reversed inbound path (no mesh-wide
+// flood); a direct neighbour or a nil packet floods. Pass pkt=nil to force flood.
+func (rt *Runtime) buildReplyMessage(ep *Endpoint, t *Test, pkt *meshpkt.Packet) (OutPacket, error) {
+	replyText := "Hopback " + t.Code + " received by " + t.EndpointName
+	// Pin one timestamp so the packet we send and the ACK CRC we expect back agree
+	// to the second; two separate time.Now() calls can straddle a second boundary.
+	replyTime := time.Now()
+	userPub, _ := hex.DecodeString(t.UserPublicKey)
+	expanded := len(ep.PrivateKey) == 128
+	var seed, peer [32]byte
+	if !expanded {
+		b, _ := hex.DecodeString(ep.PrivateKey[:64])
+		copy(seed[:], b)
+		copy(peer[:], userPub)
+	}
+	var reply []byte
+	var err error
+	if pkt != nil && pkt.HopCount() > 0 {
+		replyPath := reversePath(pkt.Path, int(pkt.PathHashSize))
+		if expanded {
+			reply, err = meshpkt.DirectTextPacketFromExpandedViaPath(ep.PrivateKey, ep.PublicKey, t.UserPublicKey, replyText, replyTime, 1, replyPath, meshpkt.WithPathHashSize(pkt.PathHashSize))
+		} else {
+			reply, err = meshpkt.DirectTextPacketFromIdentityViaPath(seed, peer, replyText, replyTime, 1, replyPath, meshpkt.WithPathHashSize(pkt.PathHashSize))
+		}
+	} else if expanded {
+		reply, err = meshpkt.DirectTextPacketFromExpanded(ep.PrivateKey, ep.PublicKey, t.UserPublicKey, replyText, replyTime, 1)
+	} else {
+		reply, err = meshpkt.DirectTextPacketFromIdentity(seed, peer, replyText, replyTime, 1)
+	}
+	if err != nil {
+		return OutPacket{}, err
+	}
+	replyCRC := meshpkt.TextAckCRC(uint32(replyTime.Unix()), 1, replyText, mustHex(ep.PublicKey))
+	return rt.outPacket("replyMessage", reply, fmt.Sprintf("%08x", replyCRC)), nil
 }
 
 func (rt *Runtime) outPacket(role string, raw []byte, crc string) OutPacket {
@@ -1645,7 +1962,8 @@ func (rt *Runtime) noteQueuedPacket(testID string, p OutPacket) {
 	}
 	active.Test.UpdatedAt = now
 	rt.rebuildIndexLocked()
-	_ = rt.store.UpdateFacts(testID, activeFacts(active.Test))
+	facts := cloneFacts(activeFacts(active.Test))
+	rt.enqueueWrite(func(e dbExec) error { return rt.store.UpdateFacts(e, testID, facts) })
 	rt.publishTestLocked(active.Test)
 }
 
@@ -1666,13 +1984,64 @@ func (rt *Runtime) handleSendResult(testID, role string, ok bool, errText string
 		active.Test.ReplyStatus = ptr("Reply handed to MeshCore IPC")
 	}
 	active.Test.UpdatedAt = now
-	testCopy := *active.Test
+	facts := cloneFacts(activeFacts(active.Test))
+	testCopy := publishCopy(active.Test)
 	rt.mu.Unlock()
-	_ = rt.store.UpdateFacts(testID, activeFacts(&testCopy))
-	rt.publishTest(rt.decorate(&testCopy))
+	rt.enqueueWrite(func(e dbExec) error { return rt.store.UpdateFacts(e, testID, facts) })
+	rt.publishTest(rt.decorate(testCopy))
 	if ok && role == "outboundAck" {
-		rt.sendReply(&testCopy)
+		rt.sendReply(testCopy)
 	}
+	if ok && role == "replyMessage" {
+		go rt.replyFloodFallback(testID)
+	}
+}
+
+// replyFloodFallback re-sends the reply as a flood if a direct-routed reply went
+// unacknowledged within the configured window. It's a one-shot guard against a
+// stale direct path silently dropping the message.
+func (rt *Runtime) replyFloodFallback(testID string) {
+	secs := rt.cfg.Service.ReplyFloodFallbackSeconds
+	if secs <= 0 {
+		return
+	}
+	time.Sleep(time.Duration(secs) * time.Second)
+
+	rt.mu.Lock()
+	active := rt.active[testID]
+	if active == nil || active.ReplyFallbackSent || active.Test.ReplyAckSeenAt != nil || active.Test.ReplyEndpointAckAt != nil {
+		rt.mu.Unlock()
+		return
+	}
+	// Only meaningful when the original reply was sent direct (the inbound took
+	// relays). A 0-hop reply already flooded, so there's nothing to fall back to.
+	outboundHex := strVal(active.Test.OutboundHex)
+	wasDirect := false
+	if raw, err := hex.DecodeString(outboundHex); err == nil {
+		if p, err := meshpkt.DecodePacket(raw); err == nil && p.HopCount() > 0 {
+			wasDirect = true
+		}
+	}
+	if !wasDirect {
+		rt.mu.Unlock()
+		return
+	}
+	active.ReplyFallbackSent = true
+	tCopy := *active.Test
+	rt.mu.Unlock()
+
+	ep := rt.endpoint(tCopy.EndpointID)
+	agent := rt.agentForEndpoint(tCopy.EndpointID)
+	if ep == nil || agent == nil || !agent.IPCReady {
+		return
+	}
+	p, err := rt.buildReplyMessage(ep, &tCopy, nil) // nil packet → flood
+	if err != nil {
+		return
+	}
+	_ = agent.send(map[string]any{"type": "sendRaw", "testId": tCopy.ID, "packetRole": "replyMessage", "rawHex": p.Hex})
+	rt.noteQueuedPacket(tCopy.ID, p)
+	rt.setReplyStatus(tCopy.ID, "Reply re-sent via flood (direct path unacknowledged)")
 }
 
 func (rt *Runtime) setReplyStatus(testID, status string) {
@@ -1681,7 +2050,8 @@ func (rt *Runtime) setReplyStatus(testID, status string) {
 		active.Test.ReplyStatus = &status
 		active.Test.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		rt.publishTestLocked(active.Test)
-		_ = rt.store.UpdateFacts(testID, activeFacts(active.Test))
+		facts := cloneFacts(activeFacts(active.Test))
+		rt.enqueueWrite(func(e dbExec) error { return rt.store.UpdateFacts(e, testID, facts) })
 	}
 	rt.mu.Unlock()
 }
@@ -1722,7 +2092,7 @@ func (rt *Runtime) publishStatus() {
 	}
 	rt.mu.RUnlock()
 	for _, c := range clients {
-		_ = c.conn.WriteJSON(payload)
+		c.send(payload)
 	}
 }
 
@@ -1730,32 +2100,34 @@ func (rt *Runtime) publishTest(t *Test) {
 	rt.mu.RLock()
 	clients := make([]*BrowserClient, 0, len(rt.browsers))
 	for c := range rt.browsers {
-		if c.browserID == t.BrowserID || c.testIDs[t.ID] {
+		if c.browserID == t.BrowserID || c.subscribed(t.ID) {
 			clients = append(clients, c)
 		}
 	}
 	rt.mu.RUnlock()
 	for _, c := range clients {
-		_ = c.conn.WriteJSON(map[string]any{"type": "testUpdated", "test": t})
+		c.send(map[string]any{"type": "testUpdated", "test": t})
 	}
 }
 
 func (rt *Runtime) publishTestLocked(t *Test) {
-	go rt.publishTest(rt.decorate(t))
+	cp := publishCopy(t)
+	go rt.publishTest(rt.decorate(cp))
 }
 
 func (rt *Runtime) publishObservation(t *Test, obs Observation) {
-	rt.publishTest(t)
+	// The observation message carries the full updated test, so there's no need
+	// for a separate testUpdated broadcast — one message per packet.
 	rt.mu.RLock()
 	clients := make([]*BrowserClient, 0, len(rt.browsers))
 	for c := range rt.browsers {
-		if c.browserID == t.BrowserID || c.testIDs[t.ID] {
+		if c.browserID == t.BrowserID || c.subscribed(t.ID) {
 			clients = append(clients, c)
 		}
 	}
 	rt.mu.RUnlock()
 	for _, c := range clients {
-		_ = c.conn.WriteJSON(map[string]any{"type": "observation", "testId": t.ID, "test": t, "observation": obs})
+		c.send(map[string]any{"type": "observation", "testId": t.ID, "test": t, "observation": obs})
 	}
 }
 
@@ -1820,10 +2192,15 @@ func (rt *Runtime) handleCoreScopeMessage(source string, msg []byte) {
 			}
 		}
 	}
+	// The observer that heard this packet may be reported on the inner packet map
+	// or on the data envelope depending on the analyzer; check both so each
+	// reception keeps a distinct observer identity (the dedup key relies on it).
+	observerID := firstNonEmpty(stringField(packet, "observer_id", "observerId"), stringField(data, "observer_id", "observerId"))
+	observerName := firstNonEmpty(stringField(packet, "observer_name", "observerName"), stringField(data, "observer_name", "observerName"))
 	rt.enqueuePacket(PacketEvent{
 		Source: "corescope:" + source, RawHex: raw, Hash: stringField(packet, "hash"),
-		ObserverID:   ptrIf(stringField(packet, "observer_id", "observerId")),
-		ObserverName: ptrIf(stringField(packet, "observer_name", "observerName")),
+		ObserverID:   ptrIf(observerID),
+		ObserverName: ptrIf(observerName),
 		Path:         parsePath(packet["path_json"], packet["path"]), ResolvedPath: parseStringSlice(packet["resolved_path"]),
 		PayloadType: payloadType, Original: data,
 	})
@@ -2317,7 +2694,7 @@ type metaScanner struct {
 func (m *metaScanner) Scan(dest ...any) error { return m.Rows.Scan(append(dest, m.Count)...) }
 
 func (s *Store) ListObservations(testID string) ([]Observation, error) {
-	rows, err := s.db.Query(`select id,direction,source,packet_hash,observer_id,observer_name,hop_count,path_json,path_keys_json,decoded_type,created_at from observations where test_id=? order by created_at desc`, testID)
+	rows, err := s.db.Query(`select id,direction,source,packet_hash,observer_id,observer_name,hop_count,path_json,path_keys_json,decoded_type,route,created_at from observations where test_id=? order by created_at desc`, testID)
 	if err != nil {
 		return nil, err
 	}
@@ -2325,9 +2702,9 @@ func (s *Store) ListObservations(testID string) ([]Observation, error) {
 	out := []Observation{}
 	for rows.Next() {
 		var o Observation
-		var oid, oname, dtype sql.NullString
+		var oid, oname, dtype, route sql.NullString
 		var pathJSON, pathKeysJSON string
-		if err := rows.Scan(&o.ID, &o.Direction, &o.Source, &o.PacketHash, &oid, &oname, &o.HopCount, &pathJSON, &pathKeysJSON, &dtype, &o.CreatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.Direction, &o.Source, &o.PacketHash, &oid, &oname, &o.HopCount, &pathJSON, &pathKeysJSON, &dtype, &route, &o.CreatedAt); err != nil {
 			return nil, err
 		}
 		if oid.Valid {
@@ -2339,6 +2716,9 @@ func (s *Store) ListObservations(testID string) ([]Observation, error) {
 		if dtype.Valid {
 			o.DecodedType = &dtype.String
 		}
+		if route.Valid {
+			o.Route = &route.String
+		}
 		_ = json.Unmarshal([]byte(pathJSON), &o.Path)
 		_ = json.Unmarshal([]byte(pathKeysJSON), &o.PathKeys)
 		out = append(out, o)
@@ -2346,23 +2726,43 @@ func (s *Store) ListObservations(testID string) ([]Observation, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) AddObservation(testID string, o Observation) error {
-	pathJSON, _ := json.Marshal(o.Path)
-	pathKeysJSON, _ := json.Marshal(o.PathKeys)
+// runBatch executes a set of writes inside a single transaction. Duplicate
+// observations are already filtered in memory before they reach here, so the
+// insert is unconditional.
+func (s *Store) runBatch(jobs []func(dbExec) error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var exists int
-	_ = s.db.QueryRow(`select count(*) from observations where test_id=? and packet_hash=? and direction=? and source=? and coalesce(observer_id,'')=coalesce(?,'') and path_json=?`, testID, o.PacketHash, o.Direction, o.Source, o.ObserverID, string(pathJSON)).Scan(&exists)
-	if exists > 0 {
-		return nil
+	tx, err := s.db.Begin()
+	if err != nil {
+		log.Printf("[db] begin failed: %v", err)
+		return
 	}
-	_, err := s.db.Exec(`insert into observations (test_id,direction,source,packet_hash,observer_id,observer_name,hop_count,path_json,path_keys_json,decoded_type,created_at) values (?,?,?,?,?,?,?,?,?,?,?)`, testID, o.Direction, o.Source, o.PacketHash, o.ObserverID, o.ObserverName, o.HopCount, string(pathJSON), string(pathKeysJSON), o.DecodedType, o.CreatedAt)
+	for _, job := range jobs {
+		if err := job(tx); err != nil {
+			log.Printf("[db] write failed: %v", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		log.Printf("[db] commit failed: %v", err)
+		_ = tx.Rollback()
+	}
+}
+
+func (s *Store) AddObservation(e dbExec, testID string, o Observation) error {
+	pathJSON, _ := json.Marshal(o.Path)
+	pathKeysJSON, _ := json.Marshal(o.PathKeys)
+	_, err := e.Exec(`insert into observations (test_id,direction,source,packet_hash,observer_id,observer_name,hop_count,path_json,path_keys_json,decoded_type,route,created_at) values (?,?,?,?,?,?,?,?,?,?,?,?)`, testID, o.Direction, o.Source, o.PacketHash, o.ObserverID, o.ObserverName, o.HopCount, string(pathJSON), string(pathKeysJSON), o.DecodedType, o.Route, o.CreatedAt)
 	return err
 }
 
-func (s *Store) UpdateFacts(testID string, f map[string]*string) error {
-	_, err := s.db.Exec(`update tests set outbound_seen_at=coalesce(?,outbound_seen_at),outbound_endpoint_seen_at=coalesce(?,outbound_endpoint_seen_at),outbound_ack_seen_at=coalesce(?,outbound_ack_seen_at),reply_broadcast_at=coalesce(?,reply_broadcast_at),return_seen_at=coalesce(?,return_seen_at),reply_ack_seen_at=coalesce(?,reply_ack_seen_at),reply_endpoint_ack_at=coalesce(?,reply_endpoint_ack_at),outbound_hash=coalesce(?,outbound_hash),outbound_ack_hash=coalesce(?,outbound_ack_hash),outbound_ack_crc_hex=coalesce(?,outbound_ack_crc_hex),return_hash=coalesce(?,return_hash),reply_hash=coalesce(?,reply_hash),reply_ack_hash=coalesce(?,reply_ack_hash),reply_ack_crc_hex=coalesce(?,reply_ack_crc_hex),outbound_hex=coalesce(?,outbound_hex),outbound_ack_hex=coalesce(?,outbound_ack_hex),return_hex=coalesce(?,return_hex),reply_hex=coalesce(?,reply_hex),reply_ack_hex=coalesce(?,reply_ack_hex),reply_status=coalesce(?,reply_status),updated_at=coalesce(?,updated_at),status=coalesce(?,status) where id=?`,
+func (s *Store) UpdateFacts(e dbExec, testID string, f map[string]*string) error {
+	_, err := e.Exec(`update tests set outbound_seen_at=coalesce(?,outbound_seen_at),outbound_endpoint_seen_at=coalesce(?,outbound_endpoint_seen_at),outbound_ack_seen_at=coalesce(?,outbound_ack_seen_at),reply_broadcast_at=coalesce(?,reply_broadcast_at),return_seen_at=coalesce(?,return_seen_at),reply_ack_seen_at=coalesce(?,reply_ack_seen_at),reply_endpoint_ack_at=coalesce(?,reply_endpoint_ack_at),outbound_hash=coalesce(?,outbound_hash),outbound_ack_hash=coalesce(?,outbound_ack_hash),outbound_ack_crc_hex=coalesce(?,outbound_ack_crc_hex),return_hash=coalesce(?,return_hash),reply_hash=coalesce(?,reply_hash),reply_ack_hash=coalesce(?,reply_ack_hash),reply_ack_crc_hex=coalesce(?,reply_ack_crc_hex),outbound_hex=coalesce(?,outbound_hex),outbound_ack_hex=coalesce(?,outbound_ack_hex),return_hex=coalesce(?,return_hex),reply_hex=coalesce(?,reply_hex),reply_ack_hex=coalesce(?,reply_ack_hex),reply_status=coalesce(?,reply_status),updated_at=coalesce(?,updated_at),status=coalesce(?,status) where id=?`,
 		f["outbound_seen_at"], f["outbound_endpoint_seen_at"], f["outbound_ack_seen_at"], f["reply_broadcast_at"], f["return_seen_at"], f["reply_ack_seen_at"], f["reply_endpoint_ack_at"], f["outbound_hash"], f["outbound_ack_hash"], f["outbound_ack_crc_hex"], f["return_hash"], f["reply_hash"], f["reply_ack_hash"], f["reply_ack_crc_hex"], f["outbound_hex"], f["outbound_ack_hex"], f["return_hex"], f["reply_hex"], f["reply_ack_hex"], f["reply_status"], f["updated_at"], f["status"], testID)
+	return err
+}
+
+func (s *Store) UpdateExpiry(e dbExec, testID, expiresAt string) error {
+	_, err := e.Exec(`update tests set expires_at=? where id=?`, expiresAt, testID)
 	return err
 }
 
