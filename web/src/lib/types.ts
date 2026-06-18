@@ -57,6 +57,7 @@ export interface DeliveryPathRow {
 export interface DeliveryPathOption {
 	key: string;
 	direction: Direction;
+	kind: PacketKind;
 	hopCount: number;
 	observationId: number;
 	packetHash: string;

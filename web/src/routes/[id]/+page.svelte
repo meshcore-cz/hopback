@@ -351,6 +351,29 @@
 		return Math.min(...items.map((item) => item.hopCount)).toString();
 	}
 
+	// Hop count for a route panel measured at the DESTINATION, not the global min
+	// (which would be 0 whenever any observer near the sender heard it directly).
+	// Outbound: the hops the message took to reach the endpoint. Return: the user's
+	// receipt isn't observed directly, so the reply-ACK's hops back to the endpoint
+	// stand in for the user<->endpoint distance.
+	function deliveryHops(
+		direction: 'outbound' | 'return',
+		messages: PacketObservation[],
+		acks: PacketObservation[],
+		current?: DiagnosticTest | null
+	) {
+		if (current) {
+			if (direction === 'outbound') {
+				const ep = firstObservation(messages.filter((m) => isEndpointObservation(m, current)));
+				if (ep) return hopLabel(ep.hopCount);
+			} else {
+				const epAck = firstObservation(acks.filter((a) => isEndpointObservation(a, current)));
+				if (epAck) return hopLabel(epAck.hopCount);
+			}
+		}
+		return hopLabel(bestHopCount(messages));
+	}
+
 	// Classifies a set of observations by the routing method the packet was sent
 	// with (from the packet header). Falls back to hop-count inference only for
 	// legacy observations recorded before the header route was captured.
@@ -456,9 +479,68 @@
 	}
 
 	function analyzerNodeUrl(publicKey: string) {
+		return `${analyzerBase()}/#/nodes/${publicKey}`;
+	}
+
+	function analyzerBase() {
 		const source = runtimeStatus?.analyzers[0]?.url || 'wss://analyzer.meshcore.cz';
-		const base = source.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
-		return `${base.replace(/\/$/, '')}/#/nodes/${publicKey}`;
+		return source
+			.replace(/^wss:\/\//, 'https://')
+			.replace(/^ws:\/\//, 'http://')
+			.replace(/\/$/, '');
+	}
+
+	function pathSignature(path?: (string | null | undefined)[]) {
+		return (path ?? []).map((hop) => String(hop ?? '').toLowerCase()).join(',');
+	}
+
+	// The analyzer's map view wants its own observation id, which the websocket feed
+	// doesn't carry. Match our observation to one in the analyzer's packet API by
+	// observer + path and return its id, so the row can deep-link to that exact obs.
+	function matchAnalyzerObsId(
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		list: any[],
+		observation: PacketObservation
+	): number | null {
+		const observer = (observation.observerId || '').toLowerCase();
+		if (!observer || !Array.isArray(list)) return null;
+		const ours = pathSignature(observation.path);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const parsePathJson = (raw: any): string[] => {
+			if (Array.isArray(raw)) return raw;
+			try {
+				const parsed = JSON.parse(raw ?? '[]');
+				return Array.isArray(parsed) ? parsed : [];
+			} catch {
+				return [];
+			}
+		};
+		const sameObserver = list.filter((o) => (o?.observer_id || '').toLowerCase() === observer);
+		const exact = sameObserver.find((o) => pathSignature(parsePathJson(o?.path_json)) === ours);
+		const match = exact ?? sameObserver[0];
+		return typeof match?.id === 'number' ? match.id : null;
+	}
+
+	async function openObservationOnAnalyzer(observation: PacketObservation) {
+		const base = analyzerBase();
+		// Open the tab synchronously (inside the click) so popup blockers don't kill
+		// it, then point it at the resolved deep link once the lookup returns.
+		const win = window.open('', '_blank');
+		let url = `${base}/#/map?packet=${observation.packetHash}`;
+		try {
+			// Proxied through our backend: the analyzer API sends no CORS headers, so a
+			// direct browser fetch would be blocked.
+			const res = await apiFetch(`/api/analyzer/packet/${observation.packetHash}`);
+			if (res.ok) {
+				const data = await res.json();
+				const obsId = matchAnalyzerObsId(data?.packet?.observations ?? [], observation);
+				if (obsId != null) url = `${base}/#/map?packet=${observation.packetHash}&obs=${obsId}`;
+			}
+		} catch {
+			// CORS or network failure — fall back to the packet map without an obs id.
+		}
+		if (win) win.location.href = url;
+		else window.open(url, '_blank', 'noreferrer');
 	}
 
 	function firstObservation(items: PacketObservation[]) {
@@ -1186,11 +1268,7 @@
 											: 'cursor-pointer text-neutral-700 hover:bg-neutral-50'}
 										onclick={(event) => {
 											event.preventDefault();
-											window.open(
-												analyzerPacketUrl(observation.packetHash),
-												'_blank',
-												'noreferrer'
-											);
+											openObservationOnAnalyzer(observation);
 										}}
 									>
 										<td class="mono py-2 pr-2 text-neutral-500">
@@ -1475,51 +1553,57 @@
 	paths: DeliveryPathOption[],
 	current: DiagnosticTest
 )}
-	{@const observation = paths[0] ?? null}
 	<div>
-		<div class="mb-2 flex items-center justify-between gap-2">
-			<p class="text-sm font-semibold text-neutral-900">{title}</p>
-			{#if observation}
-				<span class="rounded bg-neutral-100 px-2 py-1 text-xs text-neutral-600">
-					{hopLabel(observation.hopCount)}
-				</span>
-			{/if}
-		</div>
-		{#if observation}
-			{@const badgeLen = deliveryBadgeLen(observation.rows)}
+		<p class="mb-2 text-sm font-semibold text-neutral-900">{title}</p>
+		{#if paths.length}
 			<div class="grid gap-3">
-				{#each observation.rows as row, index (row.key)}
-					<button
-						class={`delivery-row group relative flex items-start gap-3 rounded-md text-left transition ${row.publicKey ? 'hover:bg-teal-50' : 'cursor-default'}`}
-						style={`--row-index: ${index}`}
-						type="button"
-						disabled={!row.publicKey}
-						onclick={() => {
-							if (row.publicKey)
-								window.open(analyzerNodeUrl(row.publicKey), '_blank', 'noreferrer');
-						}}
-						title={row.publicKey ? t('route.openNode') : undefined}
-					>
-						<span
-							class={`z-10 grid size-10 shrink-0 place-items-center rounded-full text-sm font-semibold tracking-tight tabular-nums transition ${row.tone === 'edge' ? 'bg-teal-100 text-teal-900 group-hover:bg-teal-200' : 'bg-neutral-100 text-neutral-700 group-hover:bg-teal-100 group-hover:text-teal-900'}`}
-						>
-							{deliveryBadge(row.short, badgeLen)}
-						</span>
-						<span class="min-w-0 pt-0.5">
-							<span class="block truncate text-sm font-semibold text-neutral-950"
-								>{deliveryRowName(row, current, direction)}</span
-							>
-							<span class="block text-xs text-neutral-500"
-								>{deliveryRowMeta(row, current, direction)}</span
-							>
-						</span>
-						{#if row.publicKey}
-							<ExternalLink
-								size={13}
-								class="ml-auto mt-1 shrink-0 text-neutral-300 transition group-hover:text-teal-700"
-							/>
-						{/if}
-					</button>
+				{#each paths as option (option.key)}
+					{@const badgeLen = deliveryBadgeLen(option.rows)}
+					<div class="rounded-md border border-neutral-200 p-2.5">
+						<div class="mb-2 flex items-center justify-between gap-2">
+							<span class="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+								{kindLabel(option.kind)}
+							</span>
+							<span class="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">
+								{hopLabel(option.hopCount)}
+							</span>
+						</div>
+						<div class="grid gap-3">
+							{#each option.rows as row, index (row.key)}
+								<button
+									class={`delivery-row group relative flex items-start gap-3 rounded-md text-left transition ${row.publicKey ? 'hover:bg-teal-50' : 'cursor-default'}`}
+									style={`--row-index: ${index}`}
+									type="button"
+									disabled={!row.publicKey}
+									onclick={() => {
+										if (row.publicKey)
+											window.open(analyzerNodeUrl(row.publicKey), '_blank', 'noreferrer');
+									}}
+									title={row.publicKey ? t('route.openNode') : undefined}
+								>
+									<span
+										class={`z-10 grid size-10 shrink-0 place-items-center rounded-full text-sm font-semibold tracking-tight tabular-nums transition ${row.tone === 'edge' ? 'bg-teal-100 text-teal-900 group-hover:bg-teal-200' : 'bg-neutral-100 text-neutral-700 group-hover:bg-teal-100 group-hover:text-teal-900'}`}
+									>
+										{deliveryBadge(row.short, badgeLen)}
+									</span>
+									<span class="min-w-0 pt-0.5">
+										<span class="block truncate text-sm font-semibold text-neutral-950"
+											>{deliveryRowName(row, current, direction)}</span
+										>
+										<span class="block text-xs text-neutral-500"
+											>{deliveryRowMeta(row, current, direction)}</span
+										>
+									</span>
+									{#if row.publicKey}
+										<ExternalLink
+											size={13}
+											class="ml-auto mt-1 shrink-0 text-neutral-300 transition group-hover:text-teal-700"
+										/>
+									{/if}
+								</button>
+							{/each}
+						</div>
+					</div>
 				{/each}
 			</div>
 		{:else}
@@ -1708,7 +1792,7 @@
 						{routeKind(observations)}
 					</span>
 					<span class="text-xs font-medium text-neutral-500">
-						{hopLabel(bestHopCount(messages))}
+						{deliveryHops(direction, messages, acks, test)}
 					</span>
 				</div>
 			</div>

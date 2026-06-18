@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"math"
@@ -247,6 +248,7 @@ type DeliveryPathRow struct {
 type DeliveryPathOption struct {
 	Key           string            `json:"key"`
 	Direction     string            `json:"direction"`
+	Kind          string            `json:"kind"`
 	HopCount      int               `json:"hopCount"`
 	ObservationID int64             `json:"observationId"`
 	PacketHash    string            `json:"packetHash"`
@@ -711,6 +713,7 @@ func (rt *Runtime) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/tests", rt.handleCreateTest)
 	mux.HandleFunc("POST /api/tests/meta", rt.handleTestMetas)
 	mux.HandleFunc("GET /api/tests/{id}", rt.handleGetTest)
+	mux.HandleFunc("GET /api/analyzer/packet/{hash}", rt.handleAnalyzerPacket)
 	mux.HandleFunc("GET /ws", rt.handleBrowserWS)
 	mux.HandleFunc("GET /agent", rt.handleAgentWS)
 }
@@ -793,6 +796,38 @@ func (rt *Runtime) handleTestMetas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"tests": tests})
+}
+
+// handleAnalyzerPacket proxies the analyzer's packet API so the browser can read
+// it: the analyzer serves no CORS headers, so a direct frontend fetch is blocked.
+// The frontend uses this to map our observations to the analyzer's observation ids.
+func (rt *Runtime) handleAnalyzerPacket(w http.ResponseWriter, r *http.Request) {
+	hash := strings.ToLower(strings.TrimSpace(r.PathValue("hash")))
+	if !isHex(hash) || len(hash) < 4 || len(hash) > 64 {
+		writeJSONStatus(w, 400, map[string]string{"message": "invalid packet hash"})
+		return
+	}
+	if len(rt.cfg.CoreScope.URLs) == 0 {
+		writeJSONStatus(w, 404, map[string]string{"message": "no analyzer configured"})
+		return
+	}
+	base := wsToHTTP(rt.cfg.CoreScope.URLs[0])
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/packets/"+hash, nil)
+	if err != nil {
+		writeJSONStatus(w, 502, map[string]string{"message": "analyzer request failed"})
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		writeJSONStatus(w, 502, map[string]string{"message": "analyzer unreachable"})
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, io.LimitReader(resp.Body, 4<<20))
 }
 
 func (rt *Runtime) handleTestsList(w http.ResponseWriter, r *http.Request) {
@@ -946,6 +981,7 @@ func (rt *Runtime) decorate(t *Test) *Test {
 
 func (rt *Runtime) resolveObservationNodes(t *Test) {
 	keys := []string{t.UserPublicKey, t.EndpointPublicKey}
+	prefixSet := map[string]bool{}
 	for _, obs := range t.Observations {
 		if obs.ObserverID != nil {
 			keys = append(keys, *obs.ObserverID)
@@ -957,11 +993,25 @@ func (rt *Runtime) resolveObservationNodes(t *Test) {
 				keys = append(keys, *pk)
 			}
 		}
+		// Agent hops carry only a short path-hash prefix with no full-pubkey hint;
+		// collect them for best-candidate prefix matching against the node table.
+		for j, hop := range obs.Path {
+			hasHint := j < len(obs.PathKeys) && obs.PathKeys[j] != nil && strings.TrimSpace(*obs.PathKeys[j]) != ""
+			h := strings.ToLower(strings.TrimSpace(hop))
+			if !hasHint && len(h) >= 4 {
+				prefixSet[h] = true
+			}
+		}
 	}
 	nodes, _ := rt.store.LookupNodes(keys)
 	for key, node := range nodes {
 		t.Nodes[key] = node
 	}
+	prefixList := make([]string, 0, len(prefixSet))
+	for p := range prefixSet {
+		prefixList = append(prefixList, p)
+	}
+	prefixNodes, _ := rt.store.LookupNodesByPrefix(prefixList)
 	for i := range t.Observations {
 		obs := &t.Observations[i]
 		if obs.ObserverID != nil {
@@ -972,8 +1022,7 @@ func (rt *Runtime) resolveObservationNodes(t *Test) {
 		hints := obs.PathKeys
 		obs.PathKeys = make([]*string, len(obs.Path))
 		for j, hop := range obs.Path {
-			// Prefer the full pubkey CoreScope already resolved for this hop; only
-			// fall back to short-prefix matching for agent-observed hops.
+			// 1. Full pubkey CoreScope already resolved for this hop.
 			if j < len(hints) && hints[j] != nil && strings.TrimSpace(*hints[j]) != "" {
 				hint := strings.ToLower(strings.TrimSpace(*hints[j]))
 				key := nodeKey(hint, nodes)
@@ -988,7 +1037,15 @@ func (rt *Runtime) resolveObservationNodes(t *Test) {
 				obs.PathKeys[j] = &key
 				continue
 			}
+			// 2. Exact short-hash / pubkey match.
 			if key := nodeKey(hop, nodes); key != "" {
+				obs.PathKeys[j] = &key
+				continue
+			}
+			// 3. Best-candidate prefix match for agent-observed path hashes.
+			if node, ok := prefixNodes[strings.ToLower(strings.TrimSpace(hop))]; ok && node.PublicKey != "" {
+				key := strings.ToLower(node.PublicKey)
+				t.Nodes[key] = node
 				obs.PathKeys[j] = &key
 			}
 		}
@@ -1010,27 +1067,56 @@ func (rt *Runtime) observationDistanceKm(t *Test, obs Observation) *float64 {
 	return &total
 }
 
+func (rt *Runtime) isEndpointObs(t *Test, obs Observation) bool {
+	if strings.HasPrefix(obs.Source, "agent:") {
+		return true
+	}
+	return obs.ObserverID != nil && strings.EqualFold(*obs.ObserverID, t.EndpointPublicKey)
+}
+
+// routeSignature is a stable identity for a delivery route so duplicate paths
+// (the same relay sequence seen by different observers) collapse to one entry.
+func routeSignature(rows []DeliveryPathRow) string {
+	parts := make([]string, 0, len(rows))
+	for _, r := range rows {
+		parts = append(parts, firstNonEmpty(strVal(r.PublicKey), strVal(r.ShortHash), r.Short, r.Name))
+	}
+	return strings.Join(parts, ">")
+}
+
 func (rt *Runtime) deliveryPaths(t *Test) map[string][]DeliveryPathOption {
 	paths := map[string][]DeliveryPathOption{"outbound": {}, "return": {}}
 	for _, direction := range []string{"outbound", "return"} {
-		candidates := []Observation{}
+		// A delivery route is only trustworthy when the packet was actually seen at
+		// the endpoint (the agent records it) — those are the real routes. Fall back
+		// to every observed vantage path only when the endpoint logged nothing.
+		var atEndpoint, elsewhere []Observation
 		for _, obs := range t.Observations {
-			if obs.Direction == direction && !isAckType(strVal(obs.DecodedType)) {
-				candidates = append(candidates, obs)
+			if obs.Direction != direction {
+				continue
+			}
+			if rt.isEndpointObs(t, obs) {
+				atEndpoint = append(atEndpoint, obs)
+			} else {
+				elsewhere = append(elsewhere, obs)
 			}
 		}
+		candidates := atEndpoint
 		if len(candidates) == 0 {
-			for _, obs := range t.Observations {
-				if obs.Direction == direction && isAckType(strVal(obs.DecodedType)) {
-					candidates = append(candidates, obs)
-				}
-			}
+			candidates = elsewhere
 		}
+		seenRoute := map[string]bool{}
 		for _, obs := range candidates {
 			rows := rt.deliveryRows(t, obs)
+			sig := packetKind(obs) + "|" + routeSignature(rows)
+			if seenRoute[sig] {
+				continue
+			}
+			seenRoute[sig] = true
 			paths[obs.Direction] = append(paths[obs.Direction], DeliveryPathOption{
 				Key:           fmt.Sprintf("%s:%d:%s", obs.Direction, obs.ID, obs.PacketHash),
 				Direction:     obs.Direction,
+				Kind:          packetKind(obs),
 				HopCount:      obs.HopCount,
 				ObservationID: obs.ID,
 				PacketHash:    obs.PacketHash,
@@ -2362,8 +2448,11 @@ func strVal(p *string) string {
 	return *p
 }
 
-func isHex(value string, bytes int) bool {
-	if len(value) != bytes*2 {
+func isHex(value string, bytes ...int) bool {
+	if value == "" {
+		return false
+	}
+	if len(bytes) > 0 && len(value) != bytes[0]*2 {
 		return false
 	}
 	_, err := hex.DecodeString(value)
@@ -2866,6 +2955,38 @@ func (s *Store) LookupNodes(keys []string) (map[string]NodeRef, error) {
 		out[strings.ToLower(short)] = node
 	}
 	return out, rows.Err()
+}
+
+// LookupNodesByPrefix resolves short path-hash prefixes (e.g. agent-observed
+// "a1b2") to a best-candidate node whose public key starts with that prefix.
+// Among collisions it prefers a node with coordinates, then the most recently
+// seen one. Returns a map keyed by the lowercased prefix.
+func (s *Store) LookupNodesByPrefix(prefixes []string) (map[string]NodeRef, error) {
+	out := map[string]NodeRef{}
+	seen := map[string]bool{}
+	for _, p := range prefixes {
+		p = strings.ToLower(strings.TrimSpace(p))
+		// Require at least 2 bytes; a 1-byte prefix matches too many nodes to guess.
+		if len(p) < 4 || seen[p] {
+			continue
+		}
+		seen[p] = true
+		row := s.db.QueryRow(`select public_key,name,short_hash,lat,lon from nodes where lower(public_key) like ? order by (lat is not null) desc, updated_at desc limit 1`, p+"%")
+		var pub, name, short string
+		var lat, lon sql.NullFloat64
+		if err := row.Scan(&pub, &name, &short, &lat, &lon); err != nil {
+			continue
+		}
+		node := NodeRef{Name: name, ShortHash: short, PublicKey: pub}
+		if lat.Valid {
+			node.Lat = &lat.Float64
+		}
+		if lon.Valid {
+			node.Lon = &lon.Float64
+		}
+		out[p] = node
+	}
+	return out, nil
 }
 
 func (s *Store) CountNodes() (int, error) {
