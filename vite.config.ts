@@ -9,9 +9,8 @@ export default defineConfig({
 		{
 			name: 'hopback-ws',
 			async configureServer(server) {
-				const { attachHopbackGateway } = await server.ssrLoadModule(
-					'/src/lib/server/runtime.ts'
-				);
+				if (process.env.VITEST) return;
+				const { attachHopbackGateway } = await server.ssrLoadModule('/src/lib/server/runtime.ts');
 				if (server.httpServer) attachHopbackGateway(server.httpServer as Server);
 			}
 		},
