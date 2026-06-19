@@ -260,6 +260,7 @@ export const en = {
 	'route.ack': 'ACK',
 	'route.observed': '{n} observed',
 	'route.sent': 'sent',
+	'route.sentNotSeen': 'sent · not seen on mesh',
 	'route.noPacket': 'No matching packet yet',
 	'route.openMessage': 'Open message in analyzer',
 	'route.openAck': 'Open ACK in analyzer',

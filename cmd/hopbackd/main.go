@@ -2079,7 +2079,12 @@ func (rt *Runtime) buildReplyPackets(t *Test) ([]OutPacket, error) {
 	userPub, _ := hex.DecodeString(t.UserPublicKey)
 	crc := meshpkt.TextAckCRC(ts, attempt, text, userPub)
 	out := []OutPacket{}
-	if pkt.HopCount() > 0 {
+	// A flood-routed sender has no return path, so it expects an ACK+PATH back (the
+	// firmware answers floods that way) — even at 0 hops, where the path is empty.
+	// Only a true direct neighbour that already unicast to us gets a bare ACK; a plain
+	// ACK to a flood sender isn't propagated and never reaches them.
+	floodRouted := pkt.Route == meshpkt.RouteFlood || pkt.Route == meshpkt.RouteTransportFlood
+	if pkt.HopCount() > 0 || floodRouted {
 		var ack []byte
 		if len(ep.PrivateKey) == 128 {
 			ack, err = meshpkt.PathTextAckReturnPacketFromExpanded(ep.PrivateKey, ep.PublicKey, t.UserPublicKey, ts, attempt, text, pkt.Path, meshpkt.WithPathHashSize(pkt.PathHashSize))

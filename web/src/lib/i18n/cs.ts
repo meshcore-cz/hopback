@@ -260,6 +260,7 @@ export const cs: Record<MessageKey | string, string> = {
 	'route.ack': 'ACK',
 	'route.observed': '{n} zachyceno',
 	'route.sent': 'odesláno',
+	'route.sentNotSeen': 'odesláno · v síti nezachyceno',
 	'route.noPacket': 'Zatím žádný odpovídající paket',
 	'route.openMessage': 'Otevřít zprávu v analyzátoru',
 	'route.openAck': 'Otevřít ACK v analyzátoru',

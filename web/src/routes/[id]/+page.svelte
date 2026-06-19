@@ -437,8 +437,15 @@
 		return flood ? t('route.kind.flood') : t('route.kind.direct');
 	}
 
+	// Prefer the message's own routing. When the message itself was never observed
+	// (e.g. a unicast reply where only its flooded ACK was seen), fall back to the
+	// ACK's route so a completed leg doesn't read as "pending".
 	function routeKind(items: PacketObservation[]) {
-		return routeKindOf(messageObservations(items)) ?? t('common.pending');
+		return (
+			routeKindOf(messageObservations(items)) ??
+			routeKindOf(ackObservations(items)) ??
+			t('common.pending')
+		);
 	}
 
 	function isAckPacket(observation: PacketObservation) {
@@ -2408,18 +2415,26 @@
 				</div>
 			</div>
 
+			<!-- An outbound ACK we send is self-recorded so it shows up at all; that copy
+			     isn't a real network sighting, so for the outbound leg we count only
+			     independent observers. The return (reply) ACK is sent by the user, so the
+			     endpoint observing it is genuine and all observations count. -->
+			{@const externalAcks = icon === 'send' && test ? externalObservers(acks, test) : acks}
 			<div
 				class={`mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border ${ackAccent.softBorder} ${ackAccent.softBg} p-3 text-sm`}
 			>
 				<div class="flex items-center gap-2">
-					<CheckCircle2 size={16} class={acks.length ? ackAccent.text : 'text-neutral-300'} />
+					<CheckCircle2
+						size={16}
+						class={externalAcks.length ? ackAccent.text : 'text-neutral-300'}
+					/>
 					<div>
 						<p class="text-xs font-medium text-neutral-500">{ackLabel(acks, icon === 'send')}</p>
 						<p class="font-semibold text-neutral-900">
-							{acks.length
-								? t('route.observed', { n: acks.length })
-								: ackHash
-									? t('route.sent')
+							{externalAcks.length
+								? t('route.observed', { n: externalAcks.length })
+								: acks.length || ackHash
+									? t('route.sentNotSeen')
 									: t('common.pending')}
 						</p>
 					</div>
