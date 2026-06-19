@@ -196,6 +196,9 @@ type EndpointStatus struct {
 	AgentID    string    `json:"agentId,omitempty"`
 	IPCReady   bool      `json:"ipcReady"`
 	LastSeenAt string    `json:"lastSeenAt,omitempty"`
+	// OutgoingPackets is the all-time count of raw packets the backend has sent
+	// through this endpoint's agent (the outgoing-packet audit log).
+	OutgoingPackets int `json:"outgoingPackets"`
 }
 
 type AgentStatus struct {
@@ -402,6 +405,40 @@ type Runtime struct {
 // standalone or as part of a batched transaction.
 type dbExec interface {
 	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// OutgoingPacket is one raw packet the backend handed to an endpoint's agent for
+// transmission (reply ACK, reply message, or flood re-send). It is the audit
+// counterpart to observations, which record incoming packets. Rows survive test
+// pruning (no FK to tests). Ok is nil until the agent reports a sendRawResult.
+type OutgoingPacket struct {
+	ID         int64   `json:"id"`
+	EndpointID string  `json:"endpointId"`
+	TestID     *string `json:"testId,omitempty"`
+	PacketRole string  `json:"packetRole"`
+	RawHex     string  `json:"rawHex"`
+	// ContentHash is the meshpkt content hash of RawHex (hex), matching the
+	// packetHash on observations. Derived on read, not stored. Empty if RawHex
+	// doesn't decode as a packet. Lets the audit row deep-link to the analyzer.
+	ContentHash string  `json:"contentHash,omitempty"`
+	Ok          *bool   `json:"ok,omitempty"`
+	Error       *string `json:"error,omitempty"`
+	CreatedAt   string  `json:"createdAt"`
+}
+
+// contentHashHex returns the meshpkt content hash (hex) of a raw packet, or "" if
+// it doesn't decode. Mirrors how processPacket derives an observation's hash.
+func contentHashHex(rawHex string) string {
+	raw, err := hex.DecodeString(strings.TrimSpace(rawHex))
+	if err != nil {
+		return ""
+	}
+	pkt, err := meshpkt.DecodePacket(raw)
+	if err != nil {
+		return ""
+	}
+	h := meshpkt.ContentHash(pkt)
+	return hex.EncodeToString(h[:])
 }
 
 type ActiveTest struct {
@@ -694,6 +731,16 @@ func (s *Store) migrate() error {
 		route text,
 		created_at text not null
 	);
+	create table if not exists outgoing_packets (
+		id integer primary key autoincrement,
+		endpoint_id text not null,
+		test_id text,
+		packet_role text not null,
+		raw_hex text not null,
+		ok integer,
+		error text,
+		created_at text not null
+	);
 	create table if not exists nodes (
 		public_key text primary key,
 		name text not null,
@@ -709,6 +756,7 @@ func (s *Store) migrate() error {
 	create index if not exists nodes_short_hash_idx on nodes(short_hash);
 	create index if not exists nodes_name_idx on nodes(name);
 	create index if not exists observations_packet_observer_path_idx on observations(test_id, packet_hash, direction, source, observer_id, path_json);
+	create index if not exists outgoing_endpoint_idx on outgoing_packets(endpoint_id, created_at desc);
 	`)
 	if err != nil {
 		return err
@@ -811,6 +859,7 @@ func (rt *Runtime) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/tests", rt.handleCreateTest)
 	mux.HandleFunc("POST /api/tests/meta", rt.handleTestMetas)
 	mux.HandleFunc("GET /api/tests/{id}", rt.handleGetTest)
+	mux.HandleFunc("GET /api/audit", rt.handleAudit)
 	mux.HandleFunc("GET /api/analyzer/packet/{hash}", rt.handleAnalyzerPacket)
 	mux.HandleFunc("GET /ws", rt.handleBrowserWS)
 	mux.HandleFunc("GET /agent", rt.handleAgentWS)
@@ -845,6 +894,7 @@ func (rt *Runtime) Status() RuntimeStatus {
 			}
 		}
 		st := EndpointStatus{ID: ep.ID, Name: ep.Name, Region: ep.Region, PublicKey: ep.PublicKey, Location: ep.Location, AgentID: ep.AgentID}
+		st.OutgoingPackets, _ = rt.store.CountOutgoingPackets(ep.ID)
 		if agent != nil {
 			st.Connected = true
 			st.Ready = agent.IPCReady
@@ -943,6 +993,26 @@ func (rt *Runtime) handleTestsList(w http.ResponseWriter, r *http.Request) {
 	}
 	total, _ := rt.store.CountVisibleTests(localIDs)
 	writeJSON(w, map[string]any{"tests": tests, "total": total, "limit": limit, "offset": offset})
+}
+
+// handleAudit serves the outgoing-packet log. It is public, matching the no-auth
+// operator status page: rawHex is mesh data already broadcast on the wire, so it
+// exposes no secret the network can't already see.
+func (rt *Runtime) handleAudit(w http.ResponseWriter, r *http.Request) {
+	endpointID := strings.TrimSpace(r.URL.Query().Get("endpointId"))
+	limit := intParam(r, "limit", 50, 1, 200)
+	offset := intParam(r, "offset", 0, 0, 1000000)
+	packets, err := rt.store.ListOutgoingPackets(endpointID, limit, offset)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	total, _ := rt.store.CountOutgoingPackets(endpointID)
+	var analyzerURL string
+	if len(rt.cfg.CoreScope.URLs) > 0 {
+		analyzerURL = rt.cfg.CoreScope.URLs[0]
+	}
+	writeJSON(w, map[string]any{"packets": packets, "total": total, "limit": limit, "offset": offset, "endpoints": rt.cfg.Endpoints, "analyzerUrl": analyzerURL})
 }
 
 func (rt *Runtime) handleGetTest(w http.ResponseWriter, r *http.Request) {
@@ -2103,6 +2173,23 @@ func (rt *Runtime) applyFactsLocked(t *Test, obs Observation, rawHex string) {
 	t.UpdatedAt = now
 }
 
+// sendRawToAgent hands a raw packet to the endpoint's agent for transmission and
+// records it in the outgoing-packet audit log. Every outbound send goes through
+// here so the log captures exactly what was put on the wire. The matching
+// sendRawResult later flips the row's pending status via handleSendResult.
+func (rt *Runtime) sendRawToAgent(agent *AgentClient, endpointID, testID, role, hexStr string) error {
+	rt.enqueueWrite(func(e dbExec) error {
+		return rt.store.AddOutgoingPacket(e, OutgoingPacket{
+			EndpointID: endpointID,
+			TestID:     ptrIf(testID),
+			PacketRole: role,
+			RawHex:     hexStr,
+			CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		})
+	})
+	return agent.send(map[string]any{"type": "sendRaw", "testId": testID, "packetRole": role, "rawHex": hexStr})
+}
+
 func (rt *Runtime) sendReply(t *Test) {
 	if t.OutboundHex == nil || t.ReplyEndpointAckAt != nil {
 		return
@@ -2124,7 +2211,7 @@ func (rt *Runtime) sendReply(t *Test) {
 		if p.Role == "replyMessage" && t.ReplyBroadcastAt != nil {
 			continue
 		}
-		_ = agent.send(map[string]any{"type": "sendRaw", "testId": t.ID, "packetRole": p.Role, "rawHex": p.Hex})
+		_ = rt.sendRawToAgent(agent, t.EndpointID, t.ID, p.Role, p.Hex)
 		rt.noteQueuedPacket(t.ID, p)
 		return
 	}
@@ -2308,6 +2395,7 @@ func (rt *Runtime) noteQueuedPacket(testID string, p OutPacket) {
 }
 
 func (rt *Runtime) handleSendResult(testID, role string, ok bool, errText string) {
+	rt.enqueueWrite(func(e dbExec) error { return rt.store.MarkOutgoingResult(e, testID, role, ok, errText) })
 	rt.mu.Lock()
 	active := rt.active[testID]
 	if active == nil {
@@ -2390,7 +2478,7 @@ func (rt *Runtime) replyFloodFallback(testID string) {
 	if err != nil {
 		return
 	}
-	_ = agent.send(map[string]any{"type": "sendRaw", "testId": tCopy.ID, "packetRole": "replyMessage", "rawHex": p.Hex})
+	_ = rt.sendRawToAgent(agent, tCopy.EndpointID, tCopy.ID, "replyMessage", p.Hex)
 	rt.noteQueuedPacket(tCopy.ID, p)
 	rt.setReplyStatus(tCopy.ID, "Reply re-sent via flood (direct path unacknowledged)")
 }
@@ -2715,6 +2803,13 @@ func autoReply(cfg Config) bool {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
 
 func ptrIf(v string) *string {
 	if v == "" {
@@ -3270,6 +3365,68 @@ func (s *Store) AddObservation(e dbExec, testID string, o Observation) error {
 	}
 	_, err := e.Exec(`insert into observations (test_id,direction,source,packet_hash,observer_id,observer_name,hop_count,path_json,path_keys_json,decoded_type,route,path_bytes,created_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?)`, testID, o.Direction, o.Source, o.PacketHash, o.ObserverID, o.ObserverName, o.HopCount, string(pathJSON), string(pathKeysJSON), o.DecodedType, o.Route, pathBytes, o.CreatedAt)
 	return err
+}
+
+func (s *Store) AddOutgoingPacket(e dbExec, p OutgoingPacket) error {
+	_, err := e.Exec(`insert into outgoing_packets (endpoint_id,test_id,packet_role,raw_hex,created_at) values (?,?,?,?,?)`,
+		p.EndpointID, p.TestID, p.PacketRole, p.RawHex, p.CreatedAt)
+	return err
+}
+
+// MarkOutgoingResult flips the most recent still-pending row for this test+role to
+// the agent's reported outcome. Matching on the latest pending row keeps a flood
+// re-send (same test+role) from overwriting the original send's result.
+func (s *Store) MarkOutgoingResult(e dbExec, testID, role string, ok bool, errText string) error {
+	var errVal any
+	if errText != "" {
+		errVal = errText
+	}
+	_, err := e.Exec(`update outgoing_packets set ok=?, error=? where id=(
+		select id from outgoing_packets where test_id=? and packet_role=? and ok is null order by id desc limit 1)`,
+		boolToInt(ok), errVal, testID, role)
+	return err
+}
+
+func (s *Store) ListOutgoingPackets(endpointID string, limit, offset int) ([]OutgoingPacket, error) {
+	where := ""
+	args := []any{}
+	if endpointID != "" {
+		where = "where endpoint_id=? "
+		args = append(args, endpointID)
+	}
+	args = append(args, limit, offset)
+	rows, err := s.db.Query(`select id,endpoint_id,test_id,packet_role,raw_hex,ok,error,created_at from outgoing_packets `+where+`order by id desc limit ? offset ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []OutgoingPacket{}
+	for rows.Next() {
+		var p OutgoingPacket
+		var ok *int64
+		if err := rows.Scan(&p.ID, &p.EndpointID, &p.TestID, &p.PacketRole, &p.RawHex, &ok, &p.Error, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		if ok != nil {
+			v := *ok != 0
+			p.Ok = &v
+		}
+		p.ContentHash = contentHashHex(p.RawHex)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CountOutgoingPackets(endpointID string) (int, error) {
+	where := ""
+	args := []any{}
+	if endpointID != "" {
+		where = "where endpoint_id=?"
+		args = append(args, endpointID)
+	}
+	var n int
+	err := s.db.QueryRow(`select count(*) from outgoing_packets `+where, args...).Scan(&n)
+	return n, err
 }
 
 func (s *Store) UpdateFacts(e dbExec, testID string, f map[string]*string) error {

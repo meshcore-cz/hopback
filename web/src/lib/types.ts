@@ -183,6 +183,21 @@ export interface PathStatistics {
 	averageDistanceKm?: number | null;
 }
 
+/** One raw packet the backend handed to an endpoint agent to transmit. */
+export interface OutgoingPacket {
+	id: number;
+	endpointId: string;
+	testId?: string | null;
+	packetRole: string;
+	rawHex: string;
+	/** meshpkt content hash of rawHex (hex), matching observation packetHash. */
+	contentHash?: string;
+	/** null while pending; true/false once the agent reports the send result. */
+	ok?: boolean | null;
+	error?: string | null;
+	createdAt: string;
+}
+
 export interface RuntimeStatus {
 	version: string;
 	analyzers: Array<{
@@ -202,6 +217,8 @@ export interface RuntimeStatus {
 		agentId?: string;
 		ipcReady: boolean;
 		lastSeenAt?: string;
+		/** All-time count of raw packets the backend has sent through this endpoint. */
+		outgoingPackets: number;
 	}>;
 	agents: Array<{
 		id: string;

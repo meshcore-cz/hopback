@@ -1,9 +1,10 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
-	import { Activity, ArrowLeft, Cpu, Radio, Wifi } from '@lucide/svelte';
+	import { Activity, ArrowLeft, Cpu, Radio, RadioTower, Wifi } from '@lucide/svelte';
 	import type { RuntimeStatus } from '$lib/types';
 	import { apiFetch } from '$lib/client/api';
 	import { t, locale } from '$lib/i18n/index.svelte';
@@ -34,6 +35,13 @@
 			if (poller) clearInterval(poller);
 		};
 	});
+
+	async function goToAudit(endpointId: string) {
+		const target = new URL(resolve('/audit'), window.location.origin);
+		target.searchParams.set('endpoint', endpointId);
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		await goto(target);
+	}
 
 	function agentForEndpoint(endpointId: string): StatusAgent | undefined {
 		return status?.agents.find((agent) => agent.endpointId === endpointId);
@@ -124,6 +132,13 @@
 					<ArrowLeft size={16} />
 					{t('common.back')}
 				</a>
+				<a
+					class="inline-flex items-center gap-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-medium text-neutral-800 transition hover:bg-neutral-100"
+					href={resolve('/audit')}
+				>
+					<RadioTower size={16} />
+					{t('audit.link')}
+				</a>
 				<LanguageSwitcher />
 			</div>
 			<p class="text-sm text-neutral-500">{t('opstatus.subtitle')}</p>
@@ -174,12 +189,25 @@
 								<p class="text-sm text-neutral-500">{ep.region}</p>
 								<p class="mt-1 break-all font-mono text-xs text-neutral-400">{ep.publicKey}</p>
 							</div>
-							<span
-								class={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${state.tone}`}
-							>
-								<span class="size-1.5 rounded-full bg-current"></span>
-								{state.label}
-							</span>
+							<div class="flex shrink-0 items-center gap-2">
+								<button
+									class="inline-flex items-center gap-1.5 rounded-full border border-neutral-300 px-2.5 py-1 text-xs font-medium text-neutral-700 transition hover:bg-neutral-100"
+									type="button"
+									onclick={() => goToAudit(ep.id)}
+								>
+									<RadioTower size={12} />
+									{t('audit.link')}
+									<span class="rounded-full bg-neutral-200 px-1.5 font-semibold text-neutral-700"
+										>{ep.outgoingPackets.toLocaleString()}</span
+									>
+								</button>
+								<span
+									class={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${state.tone}`}
+								>
+									<span class="size-1.5 rounded-full bg-current"></span>
+									{state.label}
+								</span>
+							</div>
 						</div>
 
 						{#if agent}
