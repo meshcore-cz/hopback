@@ -83,10 +83,11 @@ export const en = {
 	'history.col.endpoint': 'Endpoint',
 	'history.col.date': 'Date',
 	'history.col.userKey': 'User key',
+	'history.col.hops': 'Hops',
 	'history.col.code': 'Code',
 	'history.col.elapsed': 'Elapsed',
 	'history.col.time': 'Time',
-	'history.col.observed': 'Observed',
+	'history.col.observed': 'Obs',
 	'history.refreshing': 'Refreshing history…',
 	'history.showAll': 'Show all tests',
 

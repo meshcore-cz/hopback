@@ -213,6 +213,8 @@ type Test struct {
 	Nodes                  map[string]NodeRef              `json:"nodes"`
 	ObservationCount       *int                            `json:"observationCount,omitempty"`
 	PropagationMs          *int64                          `json:"propagationMs,omitempty"`
+	OutboundHopMin         *int                            `json:"outboundHopMin,omitempty"`
+	OutboundHopMax         *int                            `json:"outboundHopMax,omitempty"`
 	DeliveryPaths          map[string][]DeliveryPathOption `json:"deliveryPaths,omitempty"`
 	PropagationMap         *PropagationMapData             `json:"propagationMap,omitempty"`
 	PathStatistics         *PathStatistics                 `json:"pathStatistics,omitempty"`
@@ -1787,6 +1789,21 @@ func (rt *Runtime) processPacket(event PacketEvent) {
 		}
 		return
 	}
+	if pkt.Type == meshpkt.PayloadMultipart {
+		multipart, err := meshpkt.DecodeMultipartPayload(pkt.Payload)
+		if err == nil && multipart.InnerType == meshpkt.PayloadAck {
+			crc, err := meshpkt.DecodeAckPayload(multipart.InnerPayload)
+			if err == nil {
+				rt.mu.RLock()
+				match, ok := rt.index.ByCRC[fmt.Sprintf("%08x", crc)]
+				rt.mu.RUnlock()
+				if ok {
+					rt.recordPacket(event, match.TestID, match.Direction, "MULTIPART", &pkt, "")
+				}
+			}
+		}
+		return
+	}
 
 	candidates := rt.candidates(pkt)
 	if len(candidates) == 0 {
@@ -2080,12 +2097,16 @@ func (rt *Runtime) buildReplyPackets(t *Test) ([]OutPacket, error) {
 	userPub, _ := hex.DecodeString(t.UserPublicKey)
 	crc := meshpkt.TextAckCRC(ts, attempt, text, userPub)
 	out := []OutPacket{}
-	// A flood-routed sender has no return path, so it expects an ACK+PATH back (the
-	// firmware answers floods that way) — even at 0 hops, where the path is empty.
-	// Only a true direct neighbour that already unicast to us gets a bare ACK; a plain
-	// ACK to a flood sender isn't propagated and never reaches them.
+	// Direct-routed senders can be ACKed with a direct MULTIPART-wrapped ACK over the
+	// reversed path (empty for 0-hop neighbours). Flood-routed senders need ACK+PATH;
+	// a plain ACK to a flood sender is itself flooded and may not reach them reliably.
 	floodRouted := pkt.Route == meshpkt.RouteFlood || pkt.Route == meshpkt.RouteTransportFlood
-	if pkt.HopCount() > 0 || floodRouted {
+	if !floodRouted {
+		ack, err := directMultipartAckPacket(crc, reversePath(pkt.Path, pkt.PathHashSize), pkt.PathHashSize)
+		if err == nil {
+			out = append(out, rt.outPacket("outboundAck", ack, fmt.Sprintf("%08x", crc)))
+		}
+	} else {
 		var ack []byte
 		if len(ep.PrivateKey) == 128 {
 			ack, err = meshpkt.PathTextAckReturnPacketFromExpanded(ep.PrivateKey, ep.PublicKey, t.UserPublicKey, ts, attempt, text, pkt.Path, meshpkt.WithPathHashSize(pkt.PathHashSize))
@@ -2100,16 +2121,11 @@ func (rt *Runtime) buildReplyPackets(t *Test) ([]OutPacket, error) {
 		if err == nil {
 			out = append(out, rt.outPacket("outboundAck", ack, fmt.Sprintf("%08x", crc)))
 		}
-	} else {
-		ack, err := meshpkt.TextAckPacket(ts, attempt, text, userPub)
-		if err == nil {
-			out = append(out, rt.outPacket("outboundAck", ack, fmt.Sprintf("%08x", crc)))
-		}
 	}
-	// Send the reply DIRECT (unicast) back along the reversed inbound path when the
-	// message took relays to reach us; a direct neighbour (0 hops) has no path to
-	// follow, so it floods. A flood fallback (see replyFloodFallback) covers a
-	// stale direct path so the message is never lost.
+	// Send the reply DIRECT (unicast) back along the reversed inbound path. For a
+	// direct neighbour (0 hops), the direct path is empty. A flood fallback (see
+	// replyFloodFallback) covers a stale or unusable direct path so the message is
+	// never lost.
 	if rm, err := rt.buildReplyMessage(ep, t, &pkt); err == nil {
 		out = append(out, rm)
 	}
@@ -2131,9 +2147,22 @@ func reversePath(path []byte, hashSize int) []byte {
 	return out
 }
 
-// buildReplyMessage builds the endpoint's "received" reply. With a multi-hop
-// inbound packet it routes DIRECT along the reversed inbound path (no mesh-wide
-// flood); a direct neighbour or a nil packet floods. Pass pkt=nil to force flood.
+func directMultipartAckPacket(crc uint32, path []byte, pathHashSize int) ([]byte, error) {
+	ackBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(ackBytes, crc)
+	payload := append([]byte{byte(meshpkt.PayloadAck)}, ackBytes...)
+	return meshpkt.EncodePacket(meshpkt.Packet{
+		Route:        meshpkt.RouteDirect,
+		Type:         meshpkt.PayloadMultipart,
+		PathHashSize: pathHashSize,
+		Path:         path,
+		Payload:      payload,
+	})
+}
+
+// buildReplyMessage builds the endpoint's "received" reply. With an inbound
+// packet it routes DIRECT along the reversed inbound path (empty for 0-hop
+// neighbours, no mesh-wide flood). Pass pkt=nil to force flood.
 func (rt *Runtime) buildReplyMessage(ep *Endpoint, t *Test, pkt *meshpkt.Packet) (OutPacket, error) {
 	replyText := "Hopback " + t.Code + " received by " + t.EndpointName
 	// Pin one timestamp so the packet we send and the ACK CRC we expect back agree
@@ -2149,7 +2178,7 @@ func (rt *Runtime) buildReplyMessage(ep *Endpoint, t *Test, pkt *meshpkt.Packet)
 	}
 	var reply []byte
 	var err error
-	if pkt != nil && pkt.HopCount() > 0 {
+	if pkt != nil {
 		replyPath := reversePath(pkt.Path, int(pkt.PathHashSize))
 		if expanded {
 			reply, err = meshpkt.DirectTextPacketFromExpandedViaPath(ep.PrivateKey, ep.PublicKey, t.UserPublicKey, replyText, replyTime, 1, replyPath, meshpkt.WithPathHashSize(pkt.PathHashSize))
@@ -2262,7 +2291,7 @@ func (rt *Runtime) recordOwnOutboundAck(t *Test) {
 
 // replyFloodFallback re-sends the reply as a flood if a direct-routed reply went
 // unacknowledged within the configured window. It's a one-shot guard against a
-// stale direct path silently dropping the message.
+// stale or unusable direct path silently dropping the message.
 func (rt *Runtime) replyFloodFallback(testID string) {
 	secs := rt.cfg.Service.ReplyFloodFallbackSeconds
 	if secs <= 0 {
@@ -2273,19 +2302,6 @@ func (rt *Runtime) replyFloodFallback(testID string) {
 	rt.mu.Lock()
 	active := rt.active[testID]
 	if active == nil || active.ReplyFallbackSent || active.Test.ReplyAckSeenAt != nil || active.Test.ReplyEndpointAckAt != nil {
-		rt.mu.Unlock()
-		return
-	}
-	// Only meaningful when the original reply was sent direct (the inbound took
-	// relays). A 0-hop reply already flooded, so there's nothing to fall back to.
-	outboundHex := strVal(active.Test.OutboundHex)
-	wasDirect := false
-	if raw, err := hex.DecodeString(outboundHex); err == nil {
-		if p, err := meshpkt.DecodePacket(raw); err == nil && p.HopCount() > 0 {
-			wasDirect = true
-		}
-	}
-	if !wasDirect {
 		rt.mu.Unlock()
 		return
 	}
@@ -2986,6 +3002,11 @@ func (s *Store) ListVisibleTestMetas(localIDs []string, limit, offset int, eps [
 			return nil, err
 		}
 		t.PropagationMs = propagationMs
+		hopMin, hopMax, err := s.testOutboundHops(t.ID)
+		if err != nil {
+			return nil, err
+		}
+		t.OutboundHopMin, t.OutboundHopMax = hopMin, hopMax
 		out = append(out, *t)
 	}
 	return out, rows.Err()
@@ -3026,6 +3047,11 @@ func (s *Store) GetTestMetas(ids []string, eps []Endpoint) ([]Test, error) {
 			return nil, err
 		}
 		t.PropagationMs = propagationMs
+		hopMin, hopMax, err := s.testOutboundHops(t.ID)
+		if err != nil {
+			return nil, err
+		}
+		t.OutboundHopMin, t.OutboundHopMax = hopMin, hopMax
 		out = append(out, *t)
 	}
 	return out, rows.Err()
@@ -3070,6 +3096,31 @@ func (s *Store) testPropagationMs(testID string) (*int64, error) {
 		return nil, nil
 	}
 	return &total, nil
+}
+
+func (s *Store) testOutboundHops(testID string) (*int, *int, error) {
+	row := s.db.QueryRow(`
+		select min(o.hop_count), max(o.hop_count)
+		from observations o
+		join tests t on t.id=o.test_id
+		where o.test_id=?
+			and o.direction='outbound'
+			and (o.decoded_type is null or o.decoded_type not in ('ACK','PATH','PATH_IDENTITY','RESPONSE','MULTIPART'))
+			and (
+				o.source like 'agent:%'
+				or lower(coalesce(o.observer_id, '')) = lower(t.endpoint_public_key)
+				or lower(coalesce(o.observer_name, '')) like '%' || lower(t.endpoint_name) || '%'
+			)`, testID)
+	var minHop, maxHop sql.NullInt64
+	if err := row.Scan(&minHop, &maxHop); err != nil {
+		return nil, nil, err
+	}
+	if !minHop.Valid || !maxHop.Valid {
+		return nil, nil, nil
+	}
+	minValue := int(minHop.Int64)
+	maxValue := int(maxHop.Int64)
+	return &minValue, &maxValue, nil
 }
 
 type metaScanner struct {

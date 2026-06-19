@@ -4,7 +4,7 @@
 	import { AlertCircle, CheckCircle2, CircleDashed, KeyRound } from '@lucide/svelte';
 	import type { DiagnosticTest, TestStatus } from '$lib/types';
 	import { t, localeTag } from '$lib/i18n/index.svelte';
-	import { deriveMilestones, isAckObservation } from '$lib/milestones';
+	import { deriveMilestones, isAckObservation, isEndpointObservation } from '$lib/milestones';
 
 	interface Props {
 		tests: DiagnosticTest[];
@@ -91,6 +91,31 @@
 		return `${elapsed} (${formatPropagationMs(propagationMs)})`;
 	}
 
+	function hopRangeFromObservations(test: DiagnosticTest) {
+		const hops = test.observations
+			.filter(
+				(item) =>
+					item.direction === 'outbound' &&
+					!isAckObservation(item) &&
+					isEndpointObservation(item, test)
+			)
+			.map((item) => item.hopCount)
+			.filter(Number.isFinite);
+		if (!hops.length) return null;
+		return { min: Math.min(...hops), max: Math.max(...hops) };
+	}
+
+	function hopRange(test: DiagnosticTest) {
+		const fromMeta =
+			test.outboundHopMin != null && test.outboundHopMax != null
+				? { min: test.outboundHopMin, max: test.outboundHopMax }
+				: null;
+		const range = fromMeta ?? hopRangeFromObservations(test);
+		if (!range)
+			return test.status === 'expired' || test.status === 'failed' ? '—' : t('common.pending');
+		return range.min === range.max ? String(range.min) : `${range.min}-${range.max}`;
+	}
+
 	function formatDateTime(value?: string | null) {
 		if (!value) return '—';
 		const date = new Date(value);
@@ -123,14 +148,24 @@
 </script>
 
 <div class="overflow-x-auto">
-	<table class="w-full min-w-[860px] text-left text-sm">
+	<table class="w-full table-fixed text-left text-sm max-[720px]:min-w-[760px]">
+		<colgroup>
+			<col class="w-[9%]" />
+			<col class="w-[14%]" />
+			<col class="w-[32%]" />
+			<col class="w-[5%]" />
+			<col class="w-[7%]" />
+			<col class="w-[19%]" />
+			<col class="w-[14%]" />
+		</colgroup>
 		<thead class="border-b border-neutral-200 text-xs uppercase text-neutral-500">
 			<tr>
+				<th class="py-2 pr-3 font-semibold">{t('history.col.code')}</th>
 				<th class="py-2 pr-3 font-semibold">{t('history.col.status')}</th>
 				<th class="px-3 py-2 font-semibold">{t('history.col.route')}</th>
-				<th class="px-3 py-2 font-semibold">{t('history.col.code')}</th>
-				<th class="px-3 py-2 font-semibold">{t('history.col.elapsed')}</th>
+				<th class="px-3 py-2 font-semibold">{t('history.col.hops')}</th>
 				<th class="px-3 py-2 font-semibold">{t('history.col.observed')}</th>
+				<th class="px-3 py-2 font-semibold">{t('history.col.elapsed')}</th>
 				<th class="px-3 py-2 text-right font-semibold">{t('history.col.date')}</th>
 			</tr>
 		</thead>
@@ -139,11 +174,13 @@
 				{@const meta = statusMeta(test.status)}
 				{@const StatusIcon = meta.icon}
 				{@const time = elapsedWithPropagation(test)}
+				{@const hops = hopRange(test)}
 				{@const mine = isOwnTest(test)}
 				<tr
 					class={`group cursor-pointer transition-colors ${mine ? 'bg-teal-50/70 hover:bg-teal-100/70' : 'hover:bg-neutral-50'}`}
 					onclick={() => goto(resolve('/[id]', { id: test.id }))}
 				>
+					<td class="mono truncate py-2 pr-3 font-semibold text-neutral-800">{test.code}</td>
 					<td class="py-2 pr-3">
 						<span
 							class={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold ${meta.className}`}
@@ -172,22 +209,26 @@
 							{/if}
 						</div>
 					</td>
-					<td class="mono px-3 py-2 font-semibold text-neutral-800">{test.code}</td>
-					<td class="px-3 py-2 text-neutral-600">
+					<td class="whitespace-nowrap px-3 py-2 text-neutral-600">
+						<span class={hops === t('common.pending') || hops === '—' ? 'opacity-50' : ''}
+							>{hops}</span
+						>
+					</td>
+					<td class="truncate px-3 py-2 text-neutral-600">
+						{test.observationCount ?? test.observations.length}
+					</td>
+					<td class="truncate px-3 py-2 text-neutral-600">
 						<span class={time === t('common.pending') || time === '—' ? 'opacity-50' : ''}
 							>{time}</span
 						>
 					</td>
-					<td class="px-3 py-2 text-neutral-600">
-						{test.observationCount ?? test.observations.length}
-					</td>
-					<td class="whitespace-nowrap px-3 py-2 text-right text-neutral-600">
+					<td class="truncate whitespace-nowrap px-3 py-2 text-right text-neutral-600">
 						<span title={formatDateTime(test.createdAt)}>{historyDate(test.createdAt)}</span>
 					</td>
 				</tr>
 			{:else}
 				<tr>
-					<td colspan="6" class="py-5 text-center text-sm text-neutral-500">
+					<td colspan="7" class="py-5 text-center text-sm text-neutral-500">
 						{loading ? t('tests.loading') : emptyText}
 					</td>
 				</tr>

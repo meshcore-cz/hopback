@@ -87,10 +87,11 @@ export const cs: Record<MessageKey | string, string> = {
 	'history.col.endpoint': 'Koncový bod',
 	'history.col.date': 'Datum',
 	'history.col.userKey': 'Klíč uživatele',
+	'history.col.hops': 'Skoky',
 	'history.col.code': 'Kód',
 	'history.col.elapsed': 'Uplynulo',
 	'history.col.time': 'Čas',
-	'history.col.observed': 'Zachyceno',
+	'history.col.observed': 'Obs',
 	'history.refreshing': 'Obnovování historie…',
 	'history.showAll': 'Zobrazit všechny testy',
 

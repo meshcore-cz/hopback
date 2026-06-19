@@ -734,19 +734,40 @@
 		const floorMs = current.outboundEndpointSeenAt
 			? new Date(current.outboundEndpointSeenAt).getTime()
 			: 0;
+		const replyBroadcastMs = current.replyBroadcastAt
+			? new Date(current.replyBroadcastAt).getTime()
+			: NaN;
 		const startCandidates = [
-			current.replyBroadcastAt,
+			Number.isFinite(replyBroadcastMs) ? Math.max(replyBroadcastMs, floorMs) : null,
 			endpointReply?.createdAt,
 			firstMessage?.createdAt
 		]
-			.filter((value): value is string => Boolean(value))
-			.map((value) => new Date(value).getTime())
+			.filter((value): value is string | number => value != null && value !== '')
+			.map((value) => (typeof value === 'number' ? value : new Date(value).getTime()))
 			.filter((ms) => Number.isFinite(ms) && ms >= floorMs);
 		const replyStart = startCandidates.length
 			? new Date(Math.min(...startCandidates)).toISOString()
 			: current.replyBroadcastAt || endpointReply?.createdAt || firstMessage?.createdAt;
 		const firstAck = firstObservation(acks);
-		return duration(replyStart, firstAck?.createdAt || current.replyAckSeenAt);
+		const endpointAck = firstObservation(
+			acks.filter((item) => isEndpointObservation(item, current))
+		);
+		const endCandidates = [
+			current.replyEndpointAckAt,
+			endpointAck?.createdAt,
+			current.replyAckSeenAt,
+			firstAck?.createdAt
+		]
+			.filter((value): value is string => Boolean(value))
+			.map((value) => new Date(value).getTime())
+			.filter(Number.isFinite);
+		if (!endCandidates.length) return duration(replyStart, null);
+		const replyEnd = Math.max(...endCandidates);
+		const boundedStartCandidates = startCandidates.filter((ms) => ms <= replyEnd);
+		const boundedReplyStart = boundedStartCandidates.length
+			? new Date(Math.min(...boundedStartCandidates)).toISOString()
+			: replyStart;
+		return duration(boundedReplyStart, new Date(replyEnd).toISOString());
 	}
 
 	function packetHashButtonLabel(hash: string) {

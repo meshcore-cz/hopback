@@ -167,6 +167,8 @@ export interface DiagnosticTest {
 	nodes: Record<string, NodeRef>;
 	observationCount?: number;
 	propagationMs?: number;
+	outboundHopMin?: number;
+	outboundHopMax?: number;
 	deliveryPaths?: Record<Direction, DeliveryPathOption[]>;
 	propagationMap?: PropagationMapData;
 	pathStatistics?: PathStatistics;
