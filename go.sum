@@ -12,6 +12,8 @@ github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/ad
 github.com/konsorten/go-windows-terminal-sequences v1.0.1/go.mod h1:T0+1ngSBFLxvqU3pZ+m/2kptfBszLMUkC4ZK/EgS/cQ=
 github.com/mattn/go-sqlite3 v1.14.32 h1:JD12Ag3oLy1zQA+BNn74xRgaBbdhbNIDYvQUEuuErjs=
 github.com/mattn/go-sqlite3 v1.14.32/go.mod h1:Uh1q+B4BYcTPb+yiD3kU8Ct7aC0hY9fxUwlHK0RXw+Y=
+github.com/meshcore-cz/meshcore-go v0.5.1 h1:Z3IfSe4Vf6f/zUIrYkITk+fch9QcxZyWwU56jj+wMYQ=
+github.com/meshcore-cz/meshcore-go v0.5.1/go.mod h1:3WpCS+qxAKKJOlK6KJiso4Qt9GRWrOriLAv1w0cl4Ec=
 github.com/meshcore-cz/meshpkt v0.1.11 h1:DMF3KXz+gJ15YcPbnVFr6pELmtukz16TpX5VVoNhVmg=
 github.com/meshcore-cz/meshpkt v0.1.11/go.mod h1:OLiAc29cJnNMIFEy6jZ+mu8lfAe1iYZ3vVnYs8JJtfs=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
