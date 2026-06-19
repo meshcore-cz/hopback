@@ -170,7 +170,7 @@
 			</tr>
 		</thead>
 		<tbody class="divide-y divide-neutral-100">
-			{#each tests as test, index (test.id)}
+			{#each tests as test (test.id)}
 				{@const meta = statusMeta(test.status)}
 				{@const StatusIcon = meta.icon}
 				{@const time = elapsedWithPropagation(test)}

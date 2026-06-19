@@ -32,6 +32,8 @@
 		error = '';
 		try {
 			ownTestIds = loadLocalTestIds();
+			// Transient query builder, not reactive state, so SvelteURLSearchParams is unnecessary.
+			// eslint-disable-next-line svelte/prefer-svelte-reactivity
 			const query = new URLSearchParams({
 				limit: String(pageSize),
 				offset: String(offset)

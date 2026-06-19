@@ -138,6 +138,8 @@
 		historyLoading = true;
 		try {
 			ownTestIds = loadLocalTestIds();
+			// Transient query builder, not reactive state, so SvelteURLSearchParams is unnecessary.
+			// eslint-disable-next-line svelte/prefer-svelte-reactivity
 			const query = new URLSearchParams({ limit: '15', offset: '0' });
 			if (ownTestIds.length) query.set('ids', ownTestIds.join(','));
 			const response = await apiFetch(`/api/tests?${query}`);
@@ -351,7 +353,7 @@
 					t('network.scope', { name: status.network.name })}</span
 			>
 			{#if status.network.url}
-				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external network URL, not an app route -->
+				<!-- eslint-disable svelte/no-navigation-without-resolve -- external network URL, not an app route -->
 				<a
 					class="font-semibold underline underline-offset-2 hover:text-teal-700"
 					href={status.network.url}
@@ -360,6 +362,7 @@
 				>
 					{t('network.scopeLink')}
 				</a>
+				<!-- eslint-enable svelte/no-navigation-without-resolve -->
 			{/if}
 		</div>
 	{/if}

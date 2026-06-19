@@ -1373,6 +1373,8 @@
 				.filter((o) => packetKindLabel(o) === kind && o.packetHash)
 				.slice()
 				.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+			// Transient dedup set, not reactive state, so SvelteSet is unnecessary.
+			// eslint-disable-next-line svelte/prefer-svelte-reactivity
 			const seen = new Set<string>();
 			for (const o of ordered) {
 				if (seen.has(o.packetHash)) continue;
@@ -1877,7 +1879,7 @@
 						<p
 							class="flex flex-wrap items-baseline gap-x-1.5 text-sm font-semibold text-neutral-900"
 						>
-							{#each segments as segment}
+							{#each segments as segment, i (i)}
 								{#if segment === '{hash}'}
 									{#if event.hash}{@render ConsoleHashChip(event.hash)}{/if}
 								{:else if segment === '{msgHash}'}
