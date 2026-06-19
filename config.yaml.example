@@ -56,3 +56,6 @@ endpoints:
     # privateKey: 128hex-private-key
     # Coordinates as a single "lat,lon" string.
     location: 50.478,13.975
+    # Operator contact shown on the status page. The bracketed handle is resolved
+    # to a link. Supported: telegram:, x:, mastodon:, web:, or a plain email.
+    # operator: Jan Novák <telegram:jan_novak>

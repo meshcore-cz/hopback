@@ -4,9 +4,10 @@
 	import { onMount } from 'svelte';
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
-	import { Activity, ArrowLeft, Cpu, Radio, RadioTower, Wifi } from '@lucide/svelte';
+	import { Activity, ArrowLeft, Cpu, Radio, RadioTower, User, Wifi } from '@lucide/svelte';
 	import type { RuntimeStatus } from '$lib/types';
 	import { apiFetch } from '$lib/client/api';
+	import { parseOperator } from '$lib/operator';
 	import { t, locale } from '$lib/i18n/index.svelte';
 	import LanguageSwitcher from '$lib/i18n/LanguageSwitcher.svelte';
 	import { relativeTime, uptime } from '$lib/time';
@@ -35,6 +36,10 @@
 			if (poller) clearInterval(poller);
 		};
 	});
+
+	function openExternal(url: string) {
+		if (url) window.open(url, '_blank', 'noopener,noreferrer');
+	}
 
 	async function goToAudit(endpointId: string) {
 		const target = new URL(resolve('/audit'), window.location.origin);
@@ -179,6 +184,7 @@
 				{#each status.endpoints as ep, index (ep.id)}
 					{@const agent = agentForEndpoint(ep.id)}
 					{@const state = endpointState(ep)}
+					{@const operator = parseOperator(ep.operator)}
 					<li
 						class="rounded-md border border-neutral-200 bg-neutral-50/60 p-4"
 						in:fly={{ y: 8, duration: 300, delay: index * 50, easing: cubicOut }}
@@ -187,6 +193,24 @@
 							<div class="min-w-0">
 								<p class="font-semibold text-neutral-950">{ep.name}</p>
 								<p class="text-sm text-neutral-500">{ep.region}</p>
+								{#if operator}
+									<p class="mt-1 flex items-center gap-1.5 text-sm text-neutral-600">
+										<User size={13} class="shrink-0 text-neutral-400" />
+										<span>{t('opstatus.operator')}:</span>
+										<span class="font-medium text-neutral-800">{operator.name}</span>
+										{#if operator.label}
+											{#if operator.href}
+												<button
+													class="text-teal-700 hover:underline"
+													type="button"
+													onclick={() => openExternal(operator.href ?? '')}>{operator.label}</button
+												>
+											{:else}
+												<span class="text-neutral-500">{operator.label}</span>
+											{/if}
+										{/if}
+									</p>
+								{/if}
 								<p class="mt-1 break-all font-mono text-xs text-neutral-400">{ep.publicKey}</p>
 							</div>
 							<div class="flex shrink-0 items-center gap-2">

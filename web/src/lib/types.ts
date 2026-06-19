@@ -14,6 +14,7 @@ export interface EndpointConfig {
 	};
 	privateKey?: string;
 	agentId?: string;
+	operator?: string;
 }
 
 export interface NodeRecord {
@@ -217,6 +218,8 @@ export interface RuntimeStatus {
 		agentId?: string;
 		ipcReady: boolean;
 		lastSeenAt?: string;
+		/** Operator contact string, e.g. `Jan Novák <telegram:jan_novak>`. */
+		operator?: string;
 		/** All-time count of raw packets the backend has sent through this endpoint. */
 		outgoingPackets: number;
 	}>;

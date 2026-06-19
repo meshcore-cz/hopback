@@ -24,6 +24,7 @@ export const cs: Record<MessageKey | string, string> = {
 	'opstatus.stat.activeTests': 'Aktivní testy',
 	'opstatus.endpoints.title': 'Koncové body',
 	'opstatus.endpoints.empty': 'Žádné koncové body nejsou nakonfigurovány.',
+	'opstatus.operator': 'Provozovatel',
 	'opstatus.agent.online': 'Online',
 	'opstatus.agent.ipcNotReady': 'IPC není připraveno',
 	'opstatus.agent.offline': 'Offline',

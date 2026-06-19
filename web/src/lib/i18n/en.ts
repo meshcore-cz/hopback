@@ -22,6 +22,7 @@ export const en = {
 	'opstatus.stat.activeTests': 'Active tests',
 	'opstatus.endpoints.title': 'Endpoints',
 	'opstatus.endpoints.empty': 'No endpoints configured.',
+	'opstatus.operator': 'Operator',
 	'opstatus.agent.online': 'Online',
 	'opstatus.agent.ipcNotReady': 'IPC not ready',
 	'opstatus.agent.offline': 'Offline',

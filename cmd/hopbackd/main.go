@@ -120,6 +120,10 @@ type Endpoint struct {
 	AgentSecret string    `json:"-" yaml:"agentSecret"`
 	AgentID     string    `json:"agentId,omitempty" yaml:"agentId"`
 	Location    *Location `json:"location,omitempty" yaml:"location"`
+	// Operator is the human responsible for this endpoint, as a contact string
+	// like `Jan Novák <telegram:jan_novak>` or `Jan Novák <jan.novak@seznam.cz>`.
+	// The status page resolves the bracketed handle to a link.
+	Operator string `json:"operator,omitempty" yaml:"operator"`
 }
 
 type Location struct {
@@ -196,6 +200,7 @@ type EndpointStatus struct {
 	AgentID    string    `json:"agentId,omitempty"`
 	IPCReady   bool      `json:"ipcReady"`
 	LastSeenAt string    `json:"lastSeenAt,omitempty"`
+	Operator   string    `json:"operator,omitempty"`
 	// OutgoingPackets is the all-time count of raw packets the backend has sent
 	// through this endpoint's agent (the outgoing-packet audit log).
 	OutgoingPackets int `json:"outgoingPackets"`
@@ -893,7 +898,7 @@ func (rt *Runtime) Status() RuntimeStatus {
 				break
 			}
 		}
-		st := EndpointStatus{ID: ep.ID, Name: ep.Name, Region: ep.Region, PublicKey: ep.PublicKey, Location: ep.Location, AgentID: ep.AgentID}
+		st := EndpointStatus{ID: ep.ID, Name: ep.Name, Region: ep.Region, PublicKey: ep.PublicKey, Location: ep.Location, AgentID: ep.AgentID, Operator: ep.Operator}
 		st.OutgoingPackets, _ = rt.store.CountOutgoingPackets(ep.ID)
 		if agent != nil {
 			st.Connected = true
