@@ -37,6 +37,8 @@ export const en = {
 	'unit.hop.other': '{n} hops',
 	'unit.observer.one': '{n} observer',
 	'unit.observer.other': '{n} observers',
+	'unit.retry.one': '{n} retry',
+	'unit.retry.other': '{n} retries',
 
 	// Home — new test
 	'home.newTest.title': 'New Connectivity Test',
@@ -195,6 +197,7 @@ export const en = {
 	'delivery.conflict': '{n} nodes share this path hash',
 	'delivery.conflictOthers': 'Could also be:',
 	'delivery.hashWidth': 'Path-hash addressing width (bytes per hop)',
+	'delivery.retriesHint': 'The message was re-sent this many times before it was acknowledged.',
 
 	'stats2.title': 'Paths statistics',
 	'stats2.uniquePaths': 'Unique paths',
@@ -219,6 +222,16 @@ export const en = {
 	'obs.path.hex': 'Hex',
 	'obs.path.names': 'Names',
 	'obs.path.toggle': 'Toggle path between node names and raw hex hashes',
+	'obs.view.table': 'Observations',
+	'obs.view.console': 'Console',
+	'console.empty': 'Waiting for the first events.',
+	'console.event.outboundSeen': 'Message seen on the mesh',
+	'console.event.endpointSaw': 'Endpoint received the message',
+	'console.event.replySent': 'Endpoint broadcast the reply',
+	'console.event.replySeen': 'Reply seen on the mesh',
+	'console.event.ackSeen': 'Reply ACK seen on the mesh',
+	'console.event.ackReturned': 'Round trip complete — endpoint got the ACK',
+	'console.event.retry': '{kind} re-sent',
 	'obs.path.outOfRange':
 		'Resolved over 2000 km from the endpoint — likely a path-hash collision, excluded from distances and the map.',
 

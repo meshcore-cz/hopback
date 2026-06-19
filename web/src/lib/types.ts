@@ -64,6 +64,10 @@ export interface DeliveryPathOption {
 	key: string;
 	direction: Direction;
 	kind: PacketKind;
+	/** Every packet kind that resolved to this exact route, merged into one card. */
+	kinds?: PacketKind[];
+	/** Physical travel direction grouping the card: 'outbound' to endpoint, 'return' back. */
+	travel: Direction;
 	hopCount: number;
 	/** Per-hop path-hash size in bytes (1/2/3) the routing used; 0/absent if direct. */
 	hashWidth?: number;

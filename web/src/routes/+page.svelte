@@ -350,6 +350,7 @@
 					t('network.scope', { name: status.network.name })}</span
 			>
 			{#if status.network.url}
+				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external network URL, not an app route -->
 				<a
 					class="font-semibold underline underline-offset-2 hover:text-teal-700"
 					href={status.network.url}

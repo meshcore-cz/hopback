@@ -41,6 +41,9 @@ export const cs: Record<MessageKey | string, string> = {
 	'unit.observer.one': '{n} pozorovatel',
 	'unit.observer.few': '{n} pozorovatelé',
 	'unit.observer.many': '{n} pozorovatelů',
+	'unit.retry.one': '{n} pokus',
+	'unit.retry.few': '{n} pokusy',
+	'unit.retry.many': '{n} pokusů',
 
 	'home.newTest.title': 'Nový test konektivity',
 	'home.newTest.subtitle':
@@ -195,6 +198,7 @@ export const cs: Record<MessageKey | string, string> = {
 	'delivery.conflict': 'Tento otisk cesty sdílí {n} uzlů',
 	'delivery.conflictOthers': 'Může to být také:',
 	'delivery.hashWidth': 'Šířka adresování otisku cesty (bajtů na skok)',
+	'delivery.retriesHint': 'Zpráva byla tolikrát odeslána znovu, než byla potvrzena.',
 
 	'stats2.title': 'Statistika cest',
 	'stats2.uniquePaths': 'Unikátní cesty',
@@ -219,6 +223,16 @@ export const cs: Record<MessageKey | string, string> = {
 	'obs.path.hex': 'Hex',
 	'obs.path.names': 'Názvy',
 	'obs.path.toggle': 'Přepnout cestu mezi názvy uzlů a surovými hex otisky',
+	'obs.view.table': 'Pozorování',
+	'obs.view.console': 'Konzole',
+	'console.empty': 'Čekání na první události.',
+	'console.event.outboundSeen': 'Zpráva zachycena v síti',
+	'console.event.endpointSaw': 'Koncový bod přijal zprávu',
+	'console.event.replySent': 'Koncový bod odvysílal odpověď',
+	'console.event.replySeen': 'Odpověď zachycena v síti',
+	'console.event.ackSeen': 'ACK odpovědi zachyceno v síti',
+	'console.event.ackReturned': 'Oběh dokončen — koncový bod přijal ACK',
+	'console.event.retry': '{kind} odesláno znovu',
 	'obs.path.outOfRange':
 		'Rozpoznáno přes 2000 km od koncového bodu — pravděpodobně kolize otisku cesty, vyloučeno ze vzdáleností a mapy.',
 

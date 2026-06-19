@@ -228,9 +228,13 @@ type Observation struct {
 	ObserverID   *string   `json:"observerId,omitempty"`
 	ObserverName *string   `json:"observerName,omitempty"`
 	ObserverKey  *string   `json:"observerKey,omitempty"`
-	HopCount     int       `json:"hopCount"`
-	Path         []string  `json:"path"`
-	PathKeys     []*string `json:"pathKeys"`
+	HopCount int       `json:"hopCount"`
+	Path     []string  `json:"path"`
+	PathKeys []*string `json:"pathKeys"`
+	// PathBytes is the packet header's path-hash addressing width in bytes (1/2/3).
+	// Captured from the packet even for direct (0-hop) packets, whose empty path
+	// otherwise carries no width. 0 when unknown.
+	PathBytes int `json:"pathBytes,omitempty"`
 	DistanceKm   *float64  `json:"distanceKm,omitempty"`
 	DecodedType  *string   `json:"decodedType,omitempty"`
 	// Route is the packet header's routing method ("direct" or "flood"), i.e. how
@@ -282,7 +286,15 @@ type DeliveryPathOption struct {
 	Key           string            `json:"key"`
 	Direction string `json:"direction"`
 	Kind      string `json:"kind"`
-	HopCount  int    `json:"hopCount"`
+	// Kinds lists every packet kind that resolved to this exact route (same relays
+	// and addressing width); merged so one card can carry both titles, e.g. an ACK
+	// and a REPLY that travelled identically.
+	Kinds []string `json:"kinds,omitempty"`
+	// Travel is the physical direction the packet moves — "outbound" toward the
+	// endpoint, "return" back to the user — which groups the card, independent of
+	// the request/response leg the packet belongs to.
+	Travel   string `json:"travel"`
+	HopCount int    `json:"hopCount"`
 	// HashWidth is the per-hop path-hash size in bytes (1/2/3) the packet's routing
 	// used to address relays. 0 when there are no hops (a direct packet).
 	HashWidth     int               `json:"hashWidth,omitempty"`
@@ -655,6 +667,7 @@ func (s *Store) migrate() error {
 	// Best-effort column add for databases created before `route` existed; the
 	// error when it already exists is expected and ignored.
 	_, _ = s.db.Exec(`alter table observations add column route text`)
+	_, _ = s.db.Exec(`alter table observations add column path_bytes integer`)
 	return nil
 }
 
@@ -1133,7 +1146,7 @@ func (rt *Runtime) observationDistanceKm(t *Test, obs Observation) *float64 {
 	total := 0.0
 	counted := false
 	var prev *[2]float64
-	for _, row := range rt.deliveryRows(t, obs) {
+	for _, row := range rt.deliveryRows(t, obs, travelDirection(packetKind(obs))) {
 		if !hasCoords(row.Lat, row.Lon) ||
 			(endpoint != nil && haversineKm(endpoint[0], endpoint[1], *row.Lat, *row.Lon) > maxMapDistanceKm) {
 			prev = nil
@@ -1169,10 +1182,14 @@ func routeSignature(rows []DeliveryPathRow) string {
 	return strings.Join(parts, ">")
 }
 
-// pathHashWidth returns the per-hop path-hash size in bytes, inferred from the
-// hex width of the first relay hash (each hop is a fixed-size hash). 0 if empty.
-func pathHashWidth(path []string) int {
-	for _, h := range path {
+// pathHashWidth returns the packet's path-hash addressing width in bytes. It
+// prefers the width captured from the packet header (set even for direct, 0-hop
+// packets) and falls back to the hex width of the first relay hash.
+func pathHashWidth(obs Observation) int {
+	if obs.PathBytes > 0 {
+		return obs.PathBytes
+	}
+	for _, h := range obs.Path {
 		h = strings.TrimSpace(h)
 		if h != "" {
 			return len(h) / 2
@@ -1181,8 +1198,24 @@ func pathHashWidth(path []string) int {
 	return 0
 }
 
+// travelDirection maps a packet kind to which way it physically travels: toward
+// the endpoint ("outbound": user→endpoint) or back to the user ("return":
+// endpoint→user). The user's message and the reply's ACK both head to the
+// endpoint; the endpoint's ACK and its reply both head back to the user.
+func travelDirection(kind string) string {
+	switch kind {
+	case "user msg", "reply ack":
+		return "outbound"
+	default:
+		return "return"
+	}
+}
+
 func (rt *Runtime) deliveryPaths(t *Test) map[string][]DeliveryPathOption {
 	paths := map[string][]DeliveryPathOption{"outbound": {}, "return": {}}
+	// Within a travel group, an identical route + addressing width seen for two
+	// kinds (e.g. an ACK and a REPLY) collapses to one card carrying both titles.
+	mergedAt := map[string]map[string]int{"outbound": {}, "return": {}}
 	for _, direction := range []string{"outbound", "return"} {
 		// A delivery route is only trustworthy when the packet was actually seen at
 		// the endpoint (the agent records it) — those are the real routes. Fall back
@@ -1204,23 +1237,35 @@ func (rt *Runtime) deliveryPaths(t *Test) map[string][]DeliveryPathOption {
 		}
 		seenRoute := map[string]bool{}
 		for _, obs := range candidates {
-			rows := rt.deliveryRows(t, obs)
-			sig := packetKind(obs) + "|" + routeSignature(rows)
-			if seenRoute[sig] {
+			kind := packetKind(obs)
+			travel := travelDirection(kind)
+			rows := rt.deliveryRows(t, obs, travel)
+			routeSig := routeSignature(rows)
+			if seenRoute[kind+"|"+routeSig] {
 				continue
 			}
-			seenRoute[sig] = true
-			paths[obs.Direction] = append(paths[obs.Direction], DeliveryPathOption{
-				Key:           fmt.Sprintf("%s:%d:%s", obs.Direction, obs.ID, obs.PacketHash),
+			seenRoute[kind+"|"+routeSig] = true
+			mergeSig := strconv.Itoa(pathHashWidth(obs)) + "|" + routeSig
+			if idx, ok := mergedAt[travel][mergeSig]; ok {
+				if !containsString(paths[travel][idx].Kinds, kind) {
+					paths[travel][idx].Kinds = append(paths[travel][idx].Kinds, kind)
+				}
+				continue
+			}
+			paths[travel] = append(paths[travel], DeliveryPathOption{
+				Key:           fmt.Sprintf("%s:%d:%s", travel, obs.ID, obs.PacketHash),
 				Direction:     obs.Direction,
-				Kind:          packetKind(obs),
+				Kind:          kind,
+				Kinds:         []string{kind},
+				Travel:        travel,
 				HopCount:      obs.HopCount,
-				HashWidth:     pathHashWidth(obs.Path),
+				HashWidth:     pathHashWidth(obs),
 				ObservationID: obs.ID,
 				PacketHash:    obs.PacketHash,
 				CreatedAt:     obs.CreatedAt,
 				Rows:          rows,
 			})
+			mergedAt[travel][mergeSig] = len(paths[travel]) - 1
 		}
 	}
 	for direction := range paths {
@@ -1234,8 +1279,8 @@ func (rt *Runtime) deliveryPaths(t *Test) map[string][]DeliveryPathOption {
 	return paths
 }
 
-func (rt *Runtime) deliveryRows(t *Test, obs Observation) []DeliveryPathRow {
-	rows := []DeliveryPathRow{rt.edgeRow(t, obs.Direction, "start")}
+func (rt *Runtime) deliveryRows(t *Test, obs Observation, travel string) []DeliveryPathRow {
+	rows := []DeliveryPathRow{rt.edgeRow(t, travel, "start")}
 	for i, hop := range obs.Path {
 		key := hop
 		if i < len(obs.PathKeys) && obs.PathKeys[i] != nil {
@@ -1247,7 +1292,7 @@ func (rt *Runtime) deliveryRows(t *Test, obs Observation) []DeliveryPathRow {
 		pub := ptrIf(node.PublicKey)
 		shortPtr := ptrIf(short)
 		row := DeliveryPathRow{
-			Key:       fmt.Sprintf("%s:hop:%d:%s", obs.Direction, i, key),
+			Key:       fmt.Sprintf("%s:hop:%d:%s", travel, i, key),
 			Name:      name,
 			Meta:      "Hop " + strconv.Itoa(i+1),
 			Short:     shortLabel(short),
@@ -1271,7 +1316,7 @@ func (rt *Runtime) deliveryRows(t *Test, obs Observation) []DeliveryPathRow {
 		}
 		rows = append(rows, row)
 	}
-	rows = append(rows, rt.edgeRow(t, obs.Direction, "end"))
+	rows = append(rows, rt.edgeRow(t, travel, "end"))
 	return rows
 }
 
@@ -1871,10 +1916,12 @@ func (rt *Runtime) recordPacket(event PacketEvent, testID, direction, typ string
 		}
 	}
 	var routeKind *string
+	pathBytes := 0
 	if pkt != nil {
 		routeKind = ptr(routeLabel(pkt.Route))
+		pathBytes = int(pkt.PathHashSize)
 	}
-	obs := Observation{ID: -int64(len(active.Test.Observations) + 1), Direction: direction, Source: event.Source, PacketHash: event.Hash, ObserverID: event.ObserverID, ObserverName: event.ObserverName, HopCount: len(path), Path: path, PathKeys: pathKeys, DecodedType: ptr(typ), Route: routeKind, CreatedAt: now}
+	obs := Observation{ID: -int64(len(active.Test.Observations) + 1), Direction: direction, Source: event.Source, PacketHash: event.Hash, ObserverID: event.ObserverID, ObserverName: event.ObserverName, HopCount: len(path), Path: path, PathKeys: pathKeys, PathBytes: pathBytes, DecodedType: ptr(typ), Route: routeKind, CreatedAt: now}
 	key := observationKey(obs)
 	if active.Keys[key] {
 		rt.mu.Unlock()
@@ -2611,6 +2658,15 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func containsString(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
 func isAckType(t string) bool {
 	switch t {
 	case "ACK", "PATH", "PATH_IDENTITY", "RESPONSE", "MULTIPART":
@@ -2943,7 +2999,7 @@ type metaScanner struct {
 func (m *metaScanner) Scan(dest ...any) error { return m.Rows.Scan(append(dest, m.Count)...) }
 
 func (s *Store) ListObservations(testID string) ([]Observation, error) {
-	rows, err := s.db.Query(`select id,direction,source,packet_hash,observer_id,observer_name,hop_count,path_json,path_keys_json,decoded_type,route,created_at from observations where test_id=? order by created_at desc`, testID)
+	rows, err := s.db.Query(`select id,direction,source,packet_hash,observer_id,observer_name,hop_count,path_json,path_keys_json,decoded_type,route,path_bytes,created_at from observations where test_id=? order by created_at desc`, testID)
 	if err != nil {
 		return nil, err
 	}
@@ -2952,9 +3008,13 @@ func (s *Store) ListObservations(testID string) ([]Observation, error) {
 	for rows.Next() {
 		var o Observation
 		var oid, oname, dtype, route sql.NullString
+		var pathBytes sql.NullInt64
 		var pathJSON, pathKeysJSON string
-		if err := rows.Scan(&o.ID, &o.Direction, &o.Source, &o.PacketHash, &oid, &oname, &o.HopCount, &pathJSON, &pathKeysJSON, &dtype, &route, &o.CreatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.Direction, &o.Source, &o.PacketHash, &oid, &oname, &o.HopCount, &pathJSON, &pathKeysJSON, &dtype, &route, &pathBytes, &o.CreatedAt); err != nil {
 			return nil, err
+		}
+		if pathBytes.Valid {
+			o.PathBytes = int(pathBytes.Int64)
 		}
 		if oid.Valid {
 			o.ObserverID = &oid.String
@@ -3000,7 +3060,11 @@ func (s *Store) runBatch(jobs []func(dbExec) error) {
 func (s *Store) AddObservation(e dbExec, testID string, o Observation) error {
 	pathJSON, _ := json.Marshal(o.Path)
 	pathKeysJSON, _ := json.Marshal(o.PathKeys)
-	_, err := e.Exec(`insert into observations (test_id,direction,source,packet_hash,observer_id,observer_name,hop_count,path_json,path_keys_json,decoded_type,route,created_at) values (?,?,?,?,?,?,?,?,?,?,?,?)`, testID, o.Direction, o.Source, o.PacketHash, o.ObserverID, o.ObserverName, o.HopCount, string(pathJSON), string(pathKeysJSON), o.DecodedType, o.Route, o.CreatedAt)
+	var pathBytes any
+	if o.PathBytes > 0 {
+		pathBytes = o.PathBytes
+	}
+	_, err := e.Exec(`insert into observations (test_id,direction,source,packet_hash,observer_id,observer_name,hop_count,path_json,path_keys_json,decoded_type,route,path_bytes,created_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?)`, testID, o.Direction, o.Source, o.PacketHash, o.ObserverID, o.ObserverName, o.HopCount, string(pathJSON), string(pathKeysJSON), o.DecodedType, o.Route, pathBytes, o.CreatedAt)
 	return err
 }
 

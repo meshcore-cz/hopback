@@ -30,6 +30,7 @@
 		RotateCw,
 		Route,
 		Send,
+		Terminal,
 		XCircle
 	} from '@lucide/svelte';
 	import type {
@@ -101,6 +102,8 @@
 	// (keyed by observation id) so a single path can be flipped on its own.
 	let pathHex = $state(false);
 	let rowHexOverride = $state<Record<number, boolean>>({});
+	// The activity section can show the full packet table or a curated event console.
+	let obsView = $state<'table' | 'console'>('table');
 
 	function rowHex(id: number) {
 		return rowHexOverride[id] ?? pathHex;
@@ -660,7 +663,7 @@
 	}
 
 	function packetHashButtonLabel(hash: string) {
-		return hash.length > 18 ? `${hash.slice(0, 18)}...` : hash;
+		return hash.length > 6 ? hash.slice(0, 6) : hash;
 	}
 
 	// Delivery rows are built server-side (English); translate their edge labels here
@@ -1053,6 +1056,25 @@
 				};
 	}
 
+	// Retries = how many times a logical message was re-sent. Relays of one
+	// transmission share a content hash, so distinct content hashes for a kind are
+	// distinct transmissions; one of them is the original. Captures both the user's
+	// app re-sending and our own reply flood-fallback re-sends.
+	function retriesForKind(kind: string) {
+		const hashes = new Set(
+			(test?.observations ?? [])
+				.filter((observation) => packetKindLabel(observation) === kind)
+				.map((observation) => observation.packetHash)
+				.filter(Boolean)
+		);
+		return Math.max(0, hashes.size - 1);
+	}
+
+	function optionRetries(option: DeliveryPathOption) {
+		const kinds = option.kinds?.length ? option.kinds : [option.kind];
+		return Math.max(0, ...kinds.map(retriesForKind));
+	}
+
 	// Tooltip text for a conflicted delivery hop: the chosen node plus the rivals.
 	function conflictTitle(row: DeliveryPathRow) {
 		const names = (row.alternatives ?? []).map(
@@ -1096,6 +1118,83 @@
 			return t('detail.agent.connected', { name: current.endpointName });
 		}
 		return t('detail.agent.offline', { name: current.endpointName });
+	}
+
+	type ConsoleTone = 'start' | 'endpoint' | 'reply' | 'ack' | 'retry' | 'done';
+	type ConsoleEvent = {
+		id: string;
+		time: string;
+		tone: ConsoleTone;
+		title: string;
+		detail: string;
+	};
+
+	const CONSOLE_TONE: Record<ConsoleTone, { dot: string; text: string }> = {
+		start: { dot: 'bg-teal-500', text: 'text-teal-700' },
+		endpoint: { dot: 'bg-teal-600', text: 'text-teal-800' },
+		reply: { dot: 'bg-orange-500', text: 'text-orange-700' },
+		ack: { dot: 'bg-pink-500', text: 'text-pink-700' },
+		retry: { dot: 'bg-amber-500', text: 'text-amber-700' },
+		done: { dot: 'bg-emerald-600', text: 'text-emerald-700' }
+	};
+
+	// A curated, chronological event stream: the round-trip milestones plus notable
+	// packets (retries). Far shorter than the 300-row table, richer than the top bar.
+	function consoleEvents(current: DiagnosticTest): ConsoleEvent[] {
+		const events: ConsoleEvent[] = [];
+		const add = (
+			time: string | null | undefined,
+			tone: ConsoleTone,
+			title: string,
+			detail: string
+		) => {
+			if (time) events.push({ id: `${tone}:${title}:${time}`, time, tone, title, detail });
+		};
+		const outMsgs = messageObservations(outbound);
+		const retMsgs = messageObservations(returned);
+		const endpointOut = firstObservation(outMsgs.filter((o) => isEndpointObservation(o, current)));
+		add(
+			current.outboundSeenAt,
+			'start',
+			t('console.event.outboundSeen'),
+			observerCountLabel(outMsgs)
+		);
+		add(
+			current.outboundEndpointSeenAt,
+			'endpoint',
+			t('console.event.endpointSaw'),
+			hopLabel(endpointOut?.hopCount ?? bestHopCount(outMsgs))
+		);
+		add(current.replyBroadcastAt, 'reply', t('console.event.replySent'), '');
+		add(
+			current.returnSeenAt,
+			'reply',
+			t('console.event.replySeen'),
+			retMsgs.length ? observerCountLabel(retMsgs) : ''
+		);
+		add(current.replyAckSeenAt, 'ack', t('console.event.ackSeen'), '');
+		add(current.replyEndpointAckAt, 'done', t('console.event.ackReturned'), '');
+		// Retries: each new content hash for a message kind (after the first) is a
+		// fresh transmission, i.e. a re-send.
+		for (const kind of ['user msg', 'reply'] as const) {
+			const ordered = (current.observations ?? [])
+				.filter((o) => packetKindLabel(o) === kind && o.packetHash)
+				.slice()
+				.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+			const seen = new Set<string>();
+			for (const o of ordered) {
+				if (seen.has(o.packetHash)) continue;
+				seen.add(o.packetHash);
+				if (seen.size > 1)
+					add(
+						o.createdAt,
+						'retry',
+						t('console.event.retry', { kind: kindLabel(kind) }),
+						tn('unit.retry', seen.size - 1)
+					);
+			}
+		}
+		return events.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
 	}
 
 	class SetLike<T> {
@@ -1319,156 +1418,180 @@
 							<div class="flex items-center gap-2">
 								<Clock size={18} class="text-amber-700" />
 								<h2 class="text-lg font-semibold text-neutral-950">{t('obs.title')}</h2>
+								<div class="ml-1 inline-flex rounded-md border border-neutral-300 p-0.5 text-xs">
+									<button
+										type="button"
+										onclick={() => (obsView = 'table')}
+										class={`inline-flex items-center gap-1 rounded px-2 py-1 font-medium transition ${obsView === 'table' ? 'bg-neutral-900 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}
+									>
+										<ClipboardList size={13} />
+										<span class="hidden sm:inline">{t('obs.view.table')}</span>
+									</button>
+									<button
+										type="button"
+										onclick={() => (obsView = 'console')}
+										class={`inline-flex items-center gap-1 rounded px-2 py-1 font-medium transition ${obsView === 'console' ? 'bg-neutral-900 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}
+									>
+										<Terminal size={13} />
+										<span class="hidden sm:inline">{t('obs.view.console')}</span>
+									</button>
+								</div>
 							</div>
-							<div class="flex items-center gap-3">
-								<p class="text-sm text-neutral-500">
-									{t('obs.summary', {
-										shown: filteredObservations.length,
-										total: test.observations.length,
-										observers: uniqueObserverCount(filteredObservations),
-										paths: uniquePathCount(filteredObservations)
-									})}
-								</p>
+							{#if obsView === 'table'}
+								<div class="flex items-center gap-3">
+									<p class="text-sm text-neutral-500">
+										{t('obs.summary', {
+											shown: filteredObservations.length,
+											total: test.observations.length,
+											observers: uniqueObserverCount(filteredObservations),
+											paths: uniquePathCount(filteredObservations)
+										})}
+									</p>
+									<button
+										type="button"
+										onclick={toggleAllHex}
+										class={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition ${pathHex ? 'border-teal-300 bg-teal-50 text-teal-800' : 'border-neutral-300 text-neutral-600 hover:bg-neutral-100'}`}
+										title={t('obs.path.toggle')}
+									>
+										<Hash size={13} />
+										<span>{pathHex ? t('obs.path.names') : t('obs.path.hex')}</span>
+									</button>
+								</div>
+							{/if}
+						</div>
+						{#if obsView === 'table'}
+							<div class="mb-3 flex flex-wrap gap-2 text-xs">
 								<button
+									class={`rounded px-2 py-1 font-semibold transition ${selectedKinds.length === 0 ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'}`}
 									type="button"
-									onclick={toggleAllHex}
-									class={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition ${pathHex ? 'border-teal-300 bg-teal-50 text-teal-800' : 'border-neutral-300 text-neutral-600 hover:bg-neutral-100'}`}
-									title={t('obs.path.toggle')}
+									onclick={clearKindFilter}
 								>
-									<Hash size={13} />
-									<span>{pathHex ? t('obs.path.names') : t('obs.path.hex')}</span>
+									{t('obs.filter.all')}
 								</button>
+								{#each packetKindOptions() as kind (kind)}
+									<button
+										class={`rounded px-2 py-1 font-semibold transition ${kindFilterClass(kind)}`}
+										type="button"
+										onclick={() => toggleKind(kind)}
+									>
+										{kindLabel(kind)}
+									</button>
+								{/each}
 							</div>
-						</div>
-						<div class="mb-3 flex flex-wrap gap-2 text-xs">
-							<button
-								class={`rounded px-2 py-1 font-semibold transition ${selectedKinds.length === 0 ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'}`}
-								type="button"
-								onclick={clearKindFilter}
-							>
-								{t('obs.filter.all')}
-							</button>
-							{#each packetKindOptions() as kind (kind)}
-								<button
-									class={`rounded px-2 py-1 font-semibold transition ${kindFilterClass(kind)}`}
-									type="button"
-									onclick={() => toggleKind(kind)}
-								>
-									{kindLabel(kind)}
-								</button>
-							{/each}
-						</div>
-						<div class="max-w-full overflow-x-auto">
-							<table class="min-w-[680px] text-left text-xs sm:w-full sm:min-w-0">
-								<thead class="border-b border-neutral-200 text-neutral-500">
-									<tr>
-										<th class="py-2 pr-2 font-semibold">{t('obs.col.time')}</th>
-										<th class="px-2 py-2 font-semibold">{t('obs.col.kind')}</th>
-										<th class="px-2 py-2 font-semibold">{t('obs.col.observer')}</th>
-										<th class="px-2 py-2 font-semibold">{t('obs.col.hops')}</th>
-										<th class="px-2 py-2 font-semibold">{t('obs.col.distance')}</th>
-										<th class="px-2 py-2 font-semibold">{t('obs.col.path')}</th>
-									</tr>
-								</thead>
-								<tbody class="divide-y divide-neutral-100">
-									{#each [...filteredObservations] as observation (observation.id)}
-										{@const firstSeen = firstObservationTime(test.observations)}
-										{@const endpointObservation = isEndpointObservation(observation, test)}
-										{@const rowIsHex = rowHex(observation.id)}
-										<tr
-											class={endpointObservation
-												? 'group bg-teal-50/75 cursor-pointer text-neutral-950'
-												: 'group cursor-pointer text-neutral-700 hover:bg-neutral-50'}
-											onclick={(event) => {
-												event.preventDefault();
-												openObservationOnAnalyzer(observation);
-											}}
-										>
-											<td class="mono py-2 pr-2 text-neutral-500">
-												{relativeTime(
-													observation.createdAt,
-													new Date(firstSeen ?? test.createdAt).toISOString()
-												)}
-											</td>
-											<td class="px-2 py-2">
-												<span
-													class={`inline-flex items-center rounded px-1.5 py-0.5 font-semibold ${packetKindClass(observation)}`}
-												>
-													{kindLabel(packetKindLabel(observation))}
-												</span>
-											</td>
-											<td class="px-2 py-2">
-												<p class="max-w-32 truncate font-medium text-sm">
-													{observerLabel(observation)}
-												</p>
-												{#if observation.observerId}
-													<p class="mono max-w-32 truncate text-[10px] text-neutral-500">
-														{observation.observerId}
+							<div class="max-w-full overflow-x-auto">
+								<table class="min-w-[680px] text-left text-xs sm:w-full sm:min-w-0">
+									<thead class="border-b border-neutral-200 text-neutral-500">
+										<tr>
+											<th class="py-2 pr-2 font-semibold">{t('obs.col.time')}</th>
+											<th class="px-2 py-2 font-semibold">{t('obs.col.kind')}</th>
+											<th class="px-2 py-2 font-semibold">{t('obs.col.observer')}</th>
+											<th class="px-2 py-2 font-semibold">{t('obs.col.hops')}</th>
+											<th class="px-2 py-2 font-semibold">{t('obs.col.distance')}</th>
+											<th class="px-2 py-2 font-semibold">{t('obs.col.path')}</th>
+										</tr>
+									</thead>
+									<tbody class="divide-y divide-neutral-100">
+										{#each [...filteredObservations] as observation (observation.id)}
+											{@const firstSeen = firstObservationTime(test.observations)}
+											{@const endpointObservation = isEndpointObservation(observation, test)}
+											{@const rowIsHex = rowHex(observation.id)}
+											<tr
+												class={endpointObservation
+													? 'group bg-teal-50/75 cursor-pointer text-neutral-950'
+													: 'group cursor-pointer text-neutral-700 hover:bg-neutral-50'}
+												onclick={(event) => {
+													event.preventDefault();
+													openObservationOnAnalyzer(observation);
+												}}
+											>
+												<td class="mono py-2 pr-2 text-neutral-500">
+													{relativeTime(
+														observation.createdAt,
+														new Date(firstSeen ?? test.createdAt).toISOString()
+													)}
+												</td>
+												<td class="px-2 py-2">
+													<span
+														class={`inline-flex items-center rounded px-1.5 py-0.5 font-semibold ${packetKindClass(observation)}`}
+													>
+														{kindLabel(packetKindLabel(observation))}
+													</span>
+												</td>
+												<td class="px-2 py-2">
+													<p class="max-w-32 truncate font-medium text-sm">
+														{observerLabel(observation)}
 													</p>
-												{/if}
-											</td>
-											<td class="px-2 py-2">{observation.hopCount}</td>
-											<td class="px-2 py-2 font-medium text-neutral-600">
-												<div class="flex flex-col items-start gap-1">
-													<span>{formatDistance(observation.distanceKm)}</span>
-													{#if observation.path.length}
-														<button
-															type="button"
-															title={t('obs.path.toggle')}
-															aria-pressed={rowIsHex}
-															class={`size-5 place-items-center rounded border transition focus:grid ${rowIsHex ? 'grid border-teal-300 bg-teal-50 text-teal-700' : 'hidden border-neutral-200 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 group-hover:grid'}`}
-															onclick={(event) => {
-																event.stopPropagation();
-																toggleRowHex(observation.id);
-															}}
-														>
-															<Hash size={12} />
-														</button>
+													{#if observation.observerId}
+														<p class="mono max-w-32 truncate text-[10px] text-neutral-500">
+															{observation.observerId}
+														</p>
 													{/if}
-												</div>
-											</td>
-											<td class="max-w-64 overflow-x-auto px-2 py-2 sm:max-w-80">
-												<div class="flex flex-wrap items-center gap-1">
-													{#each compactPath(observation) as hop, index (`${hop.publicKey || hop.shortHash}:${index}`)}
-														{#if index > 0}
-															<span class="text-[10px] text-neutral-400">→</span>
-														{/if}
-														{#if hop.publicKey}
+												</td>
+												<td class="px-2 py-2">{observation.hopCount}</td>
+												<td class="px-2 py-2 font-medium text-neutral-600">
+													<div class="flex flex-col items-start gap-1">
+														<span>{formatDistance(observation.distanceKm)}</span>
+														{#if observation.path.length}
 															<button
 																type="button"
-																title={hopChipTitle(hop)}
-																class={`mono rounded px-1.5 py-0.5 text-[10px] transition-colors ${hopChipClass(hop, true)}`}
+																title={t('obs.path.toggle')}
+																aria-pressed={rowIsHex}
+																class={`size-5 place-items-center rounded border transition focus:grid ${rowIsHex ? 'grid border-teal-300 bg-teal-50 text-teal-700' : 'hidden border-neutral-200 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 group-hover:grid'}`}
 																onclick={(event) => {
 																	event.stopPropagation();
-																	if (hop.publicKey)
-																		window.open(
-																			analyzerNodeUrl(hop.publicKey),
-																			'_blank',
-																			'noreferrer'
-																		);
-																}}>{rowIsHex ? hop.hex : hop.name}</button
+																	toggleRowHex(observation.id);
+																}}
 															>
-														{:else}
-															<span
-																title={hopChipTitle(hop)}
-																class={`mono rounded px-1.5 py-0.5 text-[10px] ${hopChipClass(hop, false)}`}
-																>{rowIsHex ? hop.hex : hop.name}</span
-															>
+																<Hash size={12} />
+															</button>
 														{/if}
-													{/each}
-												</div>
-											</td>
-										</tr>
-									{:else}
-										<tr>
-											<td colspan="6" class="py-5 text-center text-sm text-neutral-500">
-												{t('obs.waiting')}
-											</td>
-										</tr>
-									{/each}
-								</tbody>
-							</table>
-						</div>
+													</div>
+												</td>
+												<td class="max-w-64 overflow-x-auto px-2 py-2 sm:max-w-80">
+													<div class="flex flex-wrap items-center gap-1">
+														{#each compactPath(observation) as hop, index (`${hop.publicKey || hop.shortHash}:${index}`)}
+															{#if index > 0}
+																<span class="text-[10px] text-neutral-400">→</span>
+															{/if}
+															{#if hop.publicKey}
+																<button
+																	type="button"
+																	title={hopChipTitle(hop)}
+																	class={`mono rounded px-1.5 py-0.5 text-[10px] transition-colors ${hopChipClass(hop, true)}`}
+																	onclick={(event) => {
+																		event.stopPropagation();
+																		if (hop.publicKey)
+																			window.open(
+																				analyzerNodeUrl(hop.publicKey),
+																				'_blank',
+																				'noreferrer'
+																			);
+																	}}>{rowIsHex ? hop.hex : hop.name}</button
+																>
+															{:else}
+																<span
+																	title={hopChipTitle(hop)}
+																	class={`mono rounded px-1.5 py-0.5 text-[10px] ${hopChipClass(hop, false)}`}
+																	>{rowIsHex ? hop.hex : hop.name}</span
+																>
+															{/if}
+														{/each}
+													</div>
+												</td>
+											</tr>
+										{:else}
+											<tr>
+												<td colspan="6" class="py-5 text-center text-sm text-neutral-500">
+													{t('obs.waiting')}
+												</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+						{:else}
+							{@render ConsolePanel(test)}
+						{/if}
 					</section>
 				</div>
 			</section>
@@ -1507,6 +1630,38 @@
 		<p class="text-sm text-neutral-500">{label}</p>
 		<p class="mt-1 truncate font-semibold text-neutral-950">{value}</p>
 	</div>
+{/snippet}
+
+{#snippet ConsolePanel(current: DiagnosticTest)}
+	{@const events = consoleEvents(current)}
+	{@const firstSeen = firstPacketSeenAt(current)}
+	{#if events.length}
+		<ol class="relative ml-2 space-y-4 border-l border-neutral-200 py-1 pl-5">
+			{#each events as event, index (event.id)}
+				{@const tone = CONSOLE_TONE[event.tone]}
+				<li class="console-event relative" style={`--row-index: ${index}`}>
+					<span
+						class={`absolute -left-[1.43rem] top-1 size-2.5 rounded-full ring-4 ring-white ${tone.dot}`}
+					></span>
+					<div class="flex items-baseline justify-between gap-3">
+						<p class="text-sm font-semibold text-neutral-900">{event.title}</p>
+						<span class="mono shrink-0 text-[11px] text-neutral-400">
+							{firstSeen ? relativeTime(event.time, new Date(firstSeen).toISOString()) : ''}
+						</span>
+					</div>
+					{#if event.detail}
+						<p class={`mt-0.5 text-xs font-medium ${tone.text}`}>{event.detail}</p>
+					{/if}
+				</li>
+			{/each}
+		</ol>
+	{:else}
+		<div
+			class="rounded-md border border-dashed border-neutral-300 bg-neutral-50 px-3 py-8 text-center text-sm text-neutral-500"
+		>
+			{t('console.empty')}
+		</div>
+	{/if}
 {/snippet}
 
 {#snippet MapPanel(full: boolean)}
@@ -1712,18 +1867,30 @@
 						<div class="mb-2 flex items-center justify-between gap-2">
 							<button
 								type="button"
-								class="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-neutral-500 transition hover:text-teal-700"
+								class="inline-flex items-center gap-1 text-xs font-medium text-neutral-600 transition hover:text-teal-700"
 								onclick={() =>
 									window.open(analyzerPacketUrl(option.packetHash), '_blank', 'noreferrer')}
 								title={t('route.openMessage')}
 							>
-								<span>{kindLabel(option.kind)}</span>
+								<span
+									>{(option.kinds?.length ? option.kinds : [option.kind])
+										.map(kindLabel)
+										.join(' / ')}</span
+								>
 								<ExternalLink size={11} strokeWidth={2} />
 							</button>
 							<div class="flex items-center gap-1.5">
 								<span class="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">
 									{option.hopCount === 0 ? t('route.kind.direct') : hopLabel(option.hopCount)}
 								</span>
+								{#if optionRetries(option) > 0}
+									<span
+										class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
+										title={t('delivery.retriesHint')}
+									>
+										{tn('unit.retry', optionRetries(option))}
+									</span>
+								{/if}
 								{#if option.hashWidth}
 									<span
 										class="rounded bg-neutral-100 px-2 py-0.5 text-xs font-medium text-neutral-500"
@@ -1952,6 +2119,11 @@
 					title={t('route.openMessage')}
 				>
 					<span>{packetHashButtonLabel(directionHash)}</span>
+					{#if retriesForKind(icon === 'send' ? 'user msg' : 'reply') > 0}
+						<span class="text-amber-600"
+							>+{retriesForKind(icon === 'send' ? 'user msg' : 'reply')}</span
+						>
+					{/if}
 					<ExternalLink size={10} strokeWidth={2} />
 				</button>
 			{/if}
@@ -1979,6 +2151,11 @@
 					<span class="text-xs font-medium text-neutral-500">
 						{deliveryHops(direction, messages, acks, test)}
 					</span>
+					{#if retriesForKind(icon === 'send' ? 'user msg' : 'reply') > 0}
+						<span class="text-xs font-medium text-amber-600" title={t('delivery.retriesHint')}>
+							{tn('unit.retry', retriesForKind(icon === 'send' ? 'user msg' : 'reply'))}
+						</span>
+					{/if}
 				</div>
 			</div>
 
@@ -2044,6 +2221,11 @@
 						title={t('route.openAck')}
 					>
 						<span>{packetHashButtonLabel(ackHash)}</span>
+						{#if retriesForKind(icon === 'send' ? 'ack+path' : 'reply ack') > 0}
+							<span class="text-amber-600"
+								>+{retriesForKind(icon === 'send' ? 'ack+path' : 'reply ack')}</span
+							>
+						{/if}
 						<ExternalLink size={10} strokeWidth={2} />
 					</button>
 				{/if}
@@ -2079,6 +2261,11 @@
 	.delivery-row {
 		animation: delivery-row-in 260ms ease-out both;
 		animation-delay: calc(var(--row-index) * 42ms);
+	}
+
+	.console-event {
+		animation: delivery-row-in 240ms ease-out both;
+		animation-delay: calc(var(--row-index) * 40ms);
 	}
 
 	.delivery-row:not(:last-child)::before {
