@@ -28,11 +28,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/meshcore-cz/hopback/internal/buildinfo"
 	"github.com/meshcore-cz/meshpkt"
 	qrcode "github.com/skip2/go-qrcode"
 	"gopkg.in/yaml.v3"
+	_ "modernc.org/sqlite"
 )
 
 const (
@@ -676,7 +676,10 @@ func openStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=on")
+	// modernc.org/sqlite (pure-Go, no cgo) takes connection settings as repeated
+	// _pragma query params rather than mattn's _busy_timeout/_journal_mode form.
+	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(on)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}

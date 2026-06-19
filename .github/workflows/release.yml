@@ -29,8 +29,6 @@ jobs:
             runner: ubuntu-latest
             goos: linux
             goarch: arm64
-            apt: gcc-aarch64-linux-gnu
-            cc: aarch64-linux-gnu-gcc
           - name: darwin-arm64
             runner: macos-14
             goos: darwin
@@ -52,12 +50,6 @@ jobs:
         with:
           node-version: 22
           cache: npm
-
-      - name: Install cross compiler
-        if: matrix.apt != ''
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ${{ matrix.apt }}
 
       # Development go.mod points meshcore-go at a local ../meshcore-go checkout.
       # On CI resolve it from the published module instead.
@@ -86,10 +78,13 @@ jobs:
           LDFLAGS="-s -w -X github.com/meshcore-cz/hopback/internal/buildinfo.Version=${VERSION}"
 
           mkdir -p dist
-          # hopbackd needs cgo for SQLite. The agent needs cgo on macOS
-          # (CoreBluetooth), so build both with cgo for consistent toolchains.
-          CGO_ENABLED=1 go build -ldflags "$LDFLAGS" -o dist/hopbackd ./cmd/hopbackd
-          CGO_ENABLED=1 go build -ldflags "$LDFLAGS" -o dist/hopback-agent ./cmd/hopback-agent
+          # hopbackd uses pure-Go SQLite (modernc.org/sqlite), so it builds fully
+          # static with cgo off on every target.
+          CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o dist/hopbackd ./cmd/hopbackd
+          # The agent needs cgo only on macOS (CoreBluetooth); Linux builds static.
+          AGENT_CGO=0
+          if [ "${{ matrix.goos }}" = "darwin" ]; then AGENT_CGO=1; fi
+          CGO_ENABLED=$AGENT_CGO go build -ldflags "$LDFLAGS" -o dist/hopback-agent ./cmd/hopback-agent
 
           SUFFIX="${RAW_TAG}_${{ matrix.goos }}_${{ matrix.goarch }}"
           tar -C dist -czf "hopbackd_${SUFFIX}.tar.gz" hopbackd
