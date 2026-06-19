@@ -14,7 +14,7 @@ The service combines a simple web frontend, a central real-time backend, [CoreSc
 - SQLite
 - CoreScope WebSocket real-time metrics and node information
 - Mesh packet matching through native `meshpkt`
-- Lightweight agent bridge for meshcore-go IPC
+- Lightweight agent bridge for meshcore-go IPC or direct MeshCore companion TCP
 
 ## Development
 
@@ -140,14 +140,16 @@ Hopback fails at startup when required backend/web configuration is missing or m
 
 ## Agent
 
-The included agent is a JSON-lines bridge between Hopback and meshcore-go IPC. Agent settings live in `.env`:
+The included agent can use either the existing meshcore-go JSON IPC daemon or a direct MeshCore companion TCP connection such as `meshcore-proxy`. Agent settings live in `.env`:
 
 ```env
 HOPBACK_BACKEND_WS=ws://127.0.0.1:3000/agent
 HOPBACK_AGENT_SECRET=change-this-secret
 HOPBACK_ENDPOINT_ID=kololec
 HOPBACK_AGENT_ID=kololec-agent
-MESHCORE_IPC_PATH=~/Library/Caches/mc/backend.sock
+MESHCORE_URI=ipc+unix://~/Library/Caches/mc/backend.sock
+# MESHCORE_URI=ipc+tcp://127.0.0.1:1738
+# MESHCORE_URI=tcp://10.0.0.30:5000
 # MESHCORE_DEVICE=default-device-id
 ```
 
@@ -161,15 +163,17 @@ After `make build`, the compiled agent is available at `bin/hopback-agent`.
 
 `HOPBACK_AGENT_SECRET` must match `service.agentSecret` from the backend/web `config.yaml`.
 
-The agent opens a dedicated long-running IPC socket and sends `watch_rf` immediately after connecting. meshcore-go acknowledges that request first, then streams RF events with base64 `bytes`; Hopback converts those bytes to packet hex and forwards RSSI/SNR/timestamp to the backend.
+`MESHCORE_URI` takes precedence. The older `MESHCORE_IPC_PATH`, `MESHCORE_IPC_HOST`, and `MESHCORE_IPC_PORT` settings are still accepted when `MESHCORE_URI` is empty.
 
-Hopback reply commands are sent through separate one-off IPC sockets using `send_mesh_packet`:
+In IPC mode, the agent opens a dedicated long-running IPC socket and sends `watch_rf` immediately after connecting. meshcore-go acknowledges that request first, then streams RF events with base64 `bytes`; Hopback converts those bytes to packet hex and forwards RSSI/SNR/timestamp to the backend. Reply commands are sent through separate one-off IPC sockets using `send_mesh_packet`:
 
 ```json
 { "id": 2, "method": "send_mesh_packet", "params": { "priority": 0, "packet": "..." } }
 ```
 
-The agent fails at startup if required `.env` values are missing or it cannot connect to `MESHCORE_IPC_PATH` or the configured TCP IPC endpoint. After one successful IPC connection, later disconnects are retried.
+In direct companion mode (`tcp://host:5000`), the agent keeps one persistent `meshcore-go` SDK client. Observations and sends share that companion connection.
+
+The agent fails at startup if required `.env` values are missing or it cannot connect to the configured radio backend. After one successful radio connection, later disconnects are retried.
 
 ## Verification
 
