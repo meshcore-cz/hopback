@@ -14,21 +14,23 @@ The agent watches raw RF packets and forwards them to the backend. It also trans
 
 ## Contents
 
-* [Request an agent secret](#step-1--request-an-agent-secret)
-* [Requirements](#requirements)
-* [Install the agent](#step-2--install-the-agent)
+- [Request an agent secret](#step-1--request-an-agent-secret)
+- [Requirements](#requirements)
+- [Install the agent](#step-2--install-the-agent)
 
-  * [Run from source](#option-a--run-from-source)
-  * [Release binary](#option-b--release-binary)
-  * [Docker Compose](#option-c--docker-compose)
-  * [Homebrew on macOS](#option-d--homebrew-on-macos)
-* [Configuration](#configuration)
+  - [Run from source](#option-a--run-from-source)
+  - [Release binary](#option-b--release-binary)
+  - [Docker Compose](#option-c--docker-compose)
+  - [Homebrew on macOS](#option-d--homebrew-on-macos)
 
-  * [`MESHCORE_URI` forms](#meshcore_uri-forms)
-* [Run as a systemd service](#running-as-a-systemd-service)
-* [Verify the connection](#step-3--verify-the-connection)
-* [Troubleshooting](#troubleshooting)
-* [Operation notes](#operation-notes)
+- [Configuration](#configuration)
+
+  - [`MESHCORE_URI` forms](#meshcore_uri-forms)
+
+- [Run as a systemd service](#running-as-a-systemd-service)
+- [Verify the connection](#step-3--verify-the-connection)
+- [Troubleshooting](#troubleshooting)
+- [Operation notes](#operation-notes)
 
 ---
 
@@ -36,9 +38,9 @@ The agent watches raw RF packets and forwards them to the backend. It also trans
 
 Contact the operator of your regional Hopback instance and provide:
 
-* a short name for the node,
-* its region or approximate location,
-* optional coordinates for the map.
+- a short name for the node,
+- its region or approximate location,
+- optional coordinates for the map.
 
 The operator registers the node as a Hopback endpoint and sends you a unique **agent secret**.
 
@@ -52,11 +54,11 @@ Keep the secret private.
 
 You need a machine that can reach:
 
-* the Hopback backend over WebSocket,
-* a MeshCore radio through either:
+- the Hopback backend over WebSocket,
+- a MeshCore radio through either:
 
-  * a running [`meshcore-go`](https://github.com/meshcore-cz/meshcore-go) IPC daemon, or
-  * a direct MeshCore companion TCP bridge such as `meshcore-proxy`.
+  - a running [`meshcore-go`](https://github.com/meshcore-cz/meshcore-go) IPC daemon, or
+  - a direct MeshCore companion TCP bridge such as `meshcore-proxy`.
 
 A Raspberry Pi, home server, VPS, Mac, or similar machine is sufficient.
 
@@ -297,9 +299,9 @@ MESHCORE_URI=tcp://10.0.0.30:5000
 
 The URI types use different protocols:
 
-* `ipc+unix://` connects to meshcore-go IPC through a Unix socket.
-* `ipc+tcp://` connects to meshcore-go IPC over TCP.
-* `tcp://` connects directly to the MeshCore companion protocol over TCP.
+- `ipc+unix://` connects to meshcore-go IPC through a Unix socket.
+- `ipc+tcp://` connects to meshcore-go IPC over TCP.
+- `tcp://` connects directly to the MeshCore companion protocol over TCP.
 
 The older `MESHCORE_IPC_PATH`, `MESHCORE_IPC_HOST`, and `MESHCORE_IPC_PORT` variables are still supported when `MESHCORE_URI` is empty.
 
@@ -401,11 +403,11 @@ Then open the Hopback instance's **Operator status** page, usually available thr
 
 Your endpoint should show:
 
-* **Online** status,
-* agent version and platform,
-* uptime,
-* radio connection status,
-* an increasing packet count as RF traffic is observed.
+- **Online** status,
+- agent version and platform,
+- uptime,
+- radio connection status,
+- an increasing packet count as RF traffic is observed.
 
 ---
 
@@ -417,12 +419,12 @@ The agent connected to the Hopback backend but cannot reach the MeshCore radio.
 
 Check:
 
-* that `MESHCORE_URI` uses the correct protocol,
-* that meshcore-go or the TCP bridge is running,
-* the socket path or TCP address,
-* Unix socket permissions,
-* Docker networking and socket mounts,
-* `MESHCORE_DEVICE` when meshcore-go exposes multiple radios.
+- that `MESHCORE_URI` uses the correct protocol,
+- that meshcore-go or the TCP bridge is running,
+- the socket path or TCP address,
+- Unix socket permissions,
+- Docker networking and socket mounts,
+- `MESHCORE_DEVICE` when meshcore-go exposes multiple radios.
 
 ### Offline
 
@@ -430,11 +432,11 @@ The backend is not receiving an agent connection.
 
 Check:
 
-* `HOPBACK_BACKEND_WS`,
-* whether `ws://` or `wss://` is correct,
-* network and firewall access,
-* whether the agent secret is correct,
-* the agent logs.
+- `HOPBACK_BACKEND_WS`,
+- whether `ws://` or `wss://` is correct,
+- network and firewall access,
+- whether the agent secret is correct,
+- the agent logs.
 
 ### Online but no packets
 
@@ -442,18 +444,18 @@ The backend connection works, but no RF packets are being observed.
 
 Check:
 
-* that the radio is connected,
-* that the correct device is selected,
-* that the node is receiving RF traffic,
-* that the radio frequency and parameters are correct.
+- that the radio is connected,
+- that the correct device is selected,
+- that the node is receiving RF traffic,
+- that the radio frequency and parameters are correct.
 
 ---
 
 ## Operation notes
 
-* The agent automatically reconnects to both the backend and the radio.
-* It keeps no local database.
-* The only local secret is the configured agent secret.
-* Upgrading means replacing the binary, pulling the newest Docker image, or running `brew upgrade`.
-* One agent serves exactly one Hopback endpoint.
-* Run one agent per radio or location, with a separate secret for each endpoint.
+- The agent automatically reconnects to both the backend and the radio.
+- It keeps no local database.
+- The only local secret is the configured agent secret.
+- Upgrading means replacing the binary, pulling the newest Docker image, or running `brew upgrade`.
+- One agent serves exactly one Hopback endpoint.
+- Run one agent per radio or location, with a separate secret for each endpoint.
