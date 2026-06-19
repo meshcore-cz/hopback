@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-sqlite3 v1.14.32
-	github.com/meshcore-cz/meshcore-go v0.0.0
+	github.com/meshcore-cz/meshcore-go v0.5.1
 	github.com/meshcore-cz/meshpkt v0.1.11
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	gopkg.in/yaml.v3 v3.0.1
@@ -27,5 +27,3 @@ require (
 	golang.org/x/sys v0.45.0 // indirect
 	tinygo.org/x/bluetooth v0.15.0 // indirect
 )
-
-replace github.com/meshcore-cz/meshcore-go => ../meshcore-go
