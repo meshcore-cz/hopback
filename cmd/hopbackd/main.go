@@ -107,12 +107,12 @@ type Config struct {
 }
 
 type Endpoint struct {
-	ID         string    `json:"id" yaml:"id"`
-	Name       string    `json:"name" yaml:"name"`
-	Region     string    `json:"region" yaml:"region"`
-	PublicKey  string    `json:"publicKey" yaml:"publicKey"`
-	Type       int       `json:"type,omitempty" yaml:"type"`
-	PrivateKey string    `json:"-" yaml:"privateKey"`
+	ID         string `json:"id" yaml:"id"`
+	Name       string `json:"name" yaml:"name"`
+	Region     string `json:"region" yaml:"region"`
+	PublicKey  string `json:"publicKey" yaml:"publicKey"`
+	Type       int    `json:"type,omitempty" yaml:"type"`
+	PrivateKey string `json:"-" yaml:"privateKey"`
 	// AgentSecret authenticates the endpoint's agent connection and, because it is
 	// unique per endpoint, lets the backend associate a connecting agent with this
 	// endpoint without the agent declaring an endpoint/agent id. Falls back to

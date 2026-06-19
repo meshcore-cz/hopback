@@ -10,7 +10,7 @@ APP_VERSION ?= $(shell sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)"
 GO_LDFLAGS := -X github.com/meshcore-cz/hopback/internal/buildinfo.Version=$(APP_VERSION)
 RELEASE_VERSION := $(patsubst v%,%,$(VERSION))
 
-.PHONY: help version config agent-env env install dev server start agent stack stack-web format check lint test test-js test-go build build-frontend build-server build-agent release verify clean
+.PHONY: help version config agent-env env install dev server start agent stack stack-web format lint-fix check lint test test-js test-go build build-frontend build-server build-agent release verify clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "Hopback targets:\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  make %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -56,8 +56,12 @@ stack: ## Run backend, frontend, and agent together
 stack-web: ## Run frontend only
 	$(MAKE) --no-print-directory dev
 
-format: ## Format frontend files
+format: ## Format frontend and Go files
 	npm run format
+	gofmt -w cmd internal
+
+lint-fix: ## Auto-fix frontend lint issues
+	npm run lint:fix
 
 check: ## Run frontend type checks
 	npm run check
@@ -113,8 +117,9 @@ release: ## Check, commit, tag, and push a release, for example make release VER
 		exit 1; \
 	}
 	cd $(JS_DIR) && npm version --no-git-tag-version "$(RELEASE_VERSION)"
-	$(MAKE) --no-print-directory check test-go
-	git add $(JS_DIR)/package.json
+	$(MAKE) --no-print-directory format lint-fix
+	$(MAKE) --no-print-directory check lint test-go
+	git add -u
 	git commit -m "chore: release $(VERSION)"
 	git tag -a "$(VERSION)" -m "hopback $(VERSION)"
 	git push $(REMOTE) $(RELEASE_BRANCH) "$(VERSION)"
