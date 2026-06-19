@@ -108,20 +108,23 @@ type Config struct {
 
 type Endpoint struct {
 	ID         string    `json:"id" yaml:"id"`
-	Host       string    `json:"host,omitempty" yaml:"host"`
 	Name       string    `json:"name" yaml:"name"`
 	Region     string    `json:"region" yaml:"region"`
 	PublicKey  string    `json:"publicKey" yaml:"publicKey"`
 	Type       int       `json:"type,omitempty" yaml:"type"`
 	PrivateKey string    `json:"-" yaml:"privateKey"`
-	AgentID    string    `json:"agentId,omitempty" yaml:"agentId"`
-	Location   *Location `json:"location,omitempty" yaml:"location"`
+	// AgentSecret authenticates the endpoint's agent connection and, because it is
+	// unique per endpoint, lets the backend associate a connecting agent with this
+	// endpoint without the agent declaring an endpoint/agent id. Falls back to
+	// service.agentSecret when omitted (only unambiguous with a single endpoint).
+	AgentSecret string    `json:"-" yaml:"agentSecret"`
+	AgentID     string    `json:"agentId,omitempty" yaml:"agentId"`
+	Location    *Location `json:"location,omitempty" yaml:"location"`
 }
 
 type Location struct {
-	Label string   `json:"label" yaml:"label"`
-	Lat   *float64 `json:"lat,omitempty" yaml:"lat"`
-	Lon   *float64 `json:"lon,omitempty" yaml:"lon"`
+	Lat *float64 `json:"lat,omitempty" yaml:"lat"`
+	Lon *float64 `json:"lon,omitempty" yaml:"lon"`
 }
 
 type RuntimeStatus struct {
@@ -158,7 +161,6 @@ type EndpointStatus struct {
 	Name       string    `json:"name"`
 	Region     string    `json:"region"`
 	PublicKey  string    `json:"publicKey"`
-	Host       string    `json:"host,omitempty"`
 	Location   *Location `json:"location,omitempty"`
 	Ready      bool      `json:"ready"`
 	Connected  bool      `json:"connected"`
@@ -168,12 +170,16 @@ type EndpointStatus struct {
 }
 
 type AgentStatus struct {
-	ID          string `json:"id"`
-	Version     string `json:"version,omitempty"`
-	EndpointID  string `json:"endpointId,omitempty"`
-	IPCReady    bool   `json:"ipcReady"`
-	ConnectedAt string `json:"connectedAt"`
-	LastSeenAt  string `json:"lastSeenAt"`
+	ID              string `json:"id"`
+	Version         string `json:"version,omitempty"`
+	EndpointID      string `json:"endpointId,omitempty"`
+	IPCReady        bool   `json:"ipcReady"`
+	ConnectedAt     string `json:"connectedAt"`
+	LastSeenAt      string `json:"lastSeenAt"`
+	Platform        string `json:"platform,omitempty"`
+	StartedAt       string `json:"startedAt,omitempty"`
+	ObservedPackets int64  `json:"observedPackets"`
+	LastObservedAt  string `json:"lastObservedAt,omitempty"`
 }
 
 type Test struct {
@@ -468,14 +474,18 @@ func (c *BrowserClient) subscribed(testID string) bool {
 }
 
 type AgentClient struct {
-	conn        *websocket.Conn
-	ID          string
-	Version     string
-	EndpointID  string
-	IPCReady    bool
-	ConnectedAt string
-	LastSeenAt  string
-	writeMu     sync.Mutex
+	conn            *websocket.Conn
+	ID              string
+	Version         string
+	EndpointID      string
+	IPCReady        bool
+	ConnectedAt     string
+	LastSeenAt      string
+	Platform        string
+	StartedAt       string
+	ObservedPackets int64
+	LastObservedAt  string
+	writeMu         sync.Mutex
 }
 
 func (a *AgentClient) send(v any) error {
@@ -557,23 +567,26 @@ func loadConfig(path string) (Config, error) {
 			cfg.CoreScope.ObserverAPIURLs = append(cfg.CoreScope.ObserverAPIURLs, wsToHTTP(u)+"/api/observers")
 		}
 	}
+	secrets := map[string]string{}
 	for i := range cfg.Endpoints {
 		cfg.Endpoints[i].PublicKey = strings.ToLower(cfg.Endpoints[i].PublicKey)
 		if cfg.Endpoints[i].Region == "" {
-			if cfg.Endpoints[i].Location != nil && cfg.Endpoints[i].Location.Label != "" {
-				cfg.Endpoints[i].Region = cfg.Endpoints[i].Location.Label
-			} else if cfg.Endpoints[i].Host != "" {
-				cfg.Endpoints[i].Region = cfg.Endpoints[i].Host
-			} else {
-				cfg.Endpoints[i].Region = "MeshCore"
-			}
+			cfg.Endpoints[i].Region = "MeshCore"
 		}
 		if cfg.Endpoints[i].PrivateKey == "" {
 			cfg.Endpoints[i].PrivateKey = cfg.Service.PrivateKey
 		}
-	}
-	if cfg.Service.AgentSecret == "" {
-		return cfg, errors.New("service.agentSecret is required")
+		if cfg.Endpoints[i].AgentSecret == "" {
+			cfg.Endpoints[i].AgentSecret = cfg.Service.AgentSecret
+		}
+		secret := cfg.Endpoints[i].AgentSecret
+		if secret == "" {
+			return cfg, fmt.Errorf("endpoint %q is missing agentSecret (set endpoints[].agentSecret or service.agentSecret)", cfg.Endpoints[i].ID)
+		}
+		if other, ok := secrets[secret]; ok {
+			return cfg, fmt.Errorf("endpoints %q and %q share the same agentSecret; each endpoint needs a unique secret so the agent can be associated automatically", other, cfg.Endpoints[i].ID)
+		}
+		secrets[secret] = cfg.Endpoints[i].ID
 	}
 	return cfg, nil
 }
@@ -791,7 +804,7 @@ func (rt *Runtime) Status() RuntimeStatus {
 	}
 	agents := make([]AgentStatus, 0, len(rt.agents))
 	for _, a := range rt.agents {
-		agents = append(agents, AgentStatus{ID: a.ID, Version: a.Version, EndpointID: a.EndpointID, IPCReady: a.IPCReady, ConnectedAt: a.ConnectedAt, LastSeenAt: a.LastSeenAt})
+		agents = append(agents, AgentStatus{ID: a.ID, Version: a.Version, EndpointID: a.EndpointID, IPCReady: a.IPCReady, ConnectedAt: a.ConnectedAt, LastSeenAt: a.LastSeenAt, Platform: a.Platform, StartedAt: a.StartedAt, ObservedPackets: a.ObservedPackets, LastObservedAt: a.LastObservedAt})
 	}
 	eps := make([]EndpointStatus, 0, len(rt.cfg.Endpoints))
 	for _, ep := range rt.cfg.Endpoints {
@@ -802,7 +815,7 @@ func (rt *Runtime) Status() RuntimeStatus {
 				break
 			}
 		}
-		st := EndpointStatus{ID: ep.ID, Name: ep.Name, Region: ep.Region, PublicKey: ep.PublicKey, Host: ep.Host, Location: ep.Location, AgentID: ep.AgentID}
+		st := EndpointStatus{ID: ep.ID, Name: ep.Name, Region: ep.Region, PublicKey: ep.PublicKey, Location: ep.Location, AgentID: ep.AgentID}
 		if agent != nil {
 			st.Connected = true
 			st.Ready = agent.IPCReady
@@ -1647,7 +1660,8 @@ func (rt *Runtime) handleBrowserWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (rt *Runtime) handleAgentWS(w http.ResponseWriter, r *http.Request) {
-	if !rt.authorized(r) {
+	ep := rt.endpointForSecret(r)
+	if ep == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1656,15 +1670,15 @@ func (rt *Runtime) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	id := r.URL.Query().Get("id")
+	id := ep.AgentID
 	if id == "" {
-		id = randomID()
+		id = "agent-" + ep.ID
 	}
-	agent := &AgentClient{conn: conn, ID: id, EndpointID: r.URL.Query().Get("endpointId"), ConnectedAt: now, LastSeenAt: now}
+	agent := &AgentClient{conn: conn, ID: id, EndpointID: ep.ID, ConnectedAt: now, LastSeenAt: now}
 	rt.mu.Lock()
 	rt.agents[id] = agent
 	rt.mu.Unlock()
-	_ = agent.send(map[string]any{"type": "hello", "id": id, "status": rt.Status()})
+	_ = agent.send(map[string]any{"type": "hello", "id": id, "endpointId": ep.ID, "status": rt.Status()})
 	rt.publishStatus()
 	for {
 		var raw json.RawMessage
@@ -1675,17 +1689,34 @@ func (rt *Runtime) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		rt.handleAgentMessage(agent, raw)
 	}
 	rt.mu.Lock()
-	delete(rt.agents, id)
+	// Only drop the map entry if it still points at this connection; a reconnect
+	// with the same per-endpoint id may have already replaced it.
+	if rt.agents[id] == agent {
+		delete(rt.agents, id)
+	}
 	rt.mu.Unlock()
 	rt.publishStatus()
 	_ = conn.Close()
 }
 
-func (rt *Runtime) authorized(r *http.Request) bool {
-	if r.URL.Query().Get("secret") == rt.cfg.Service.AgentSecret {
-		return true
+// endpointForSecret matches an agent connection's secret to the endpoint it
+// serves. Each endpoint has a unique agentSecret, so a match both authenticates
+// the agent and identifies which endpoint it represents — the agent never has to
+// declare an endpoint or agent id. Returns nil when no endpoint matches.
+func (rt *Runtime) endpointForSecret(r *http.Request) *Endpoint {
+	secret := r.URL.Query().Get("secret")
+	if secret == "" {
+		secret = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	}
-	return r.Header.Get("Authorization") == "Bearer "+rt.cfg.Service.AgentSecret
+	if secret == "" {
+		return nil
+	}
+	for i := range rt.cfg.Endpoints {
+		if rt.cfg.Endpoints[i].AgentSecret == secret {
+			return &rt.cfg.Endpoints[i]
+		}
+	}
+	return nil
 }
 
 func (rt *Runtime) handleAgentMessage(agent *AgentClient, raw json.RawMessage) {
@@ -1697,24 +1728,25 @@ func (rt *Runtime) handleAgentMessage(agent *AgentClient, raw json.RawMessage) {
 	}
 	switch base.Type {
 	case "hello":
+		// Identity (id, endpointId) is assigned by the backend from the agent's
+		// per-endpoint secret, so the agent only reports its liveness and host
+		// details here.
 		var msg struct {
-			ID         string `json:"id"`
-			Version    string `json:"version"`
-			EndpointID string `json:"endpointId"`
-			IPCReady   bool   `json:"ipcReady"`
+			Version   string `json:"version"`
+			IPCReady  bool   `json:"ipcReady"`
+			Platform  string `json:"platform"`
+			StartedAt string `json:"startedAt"`
 		}
 		_ = json.Unmarshal(raw, &msg)
 		rt.mu.Lock()
-		if msg.ID != "" && msg.ID != agent.ID {
-			delete(rt.agents, agent.ID)
-			agent.ID = msg.ID
-			rt.agents[agent.ID] = agent
-		}
-		if msg.EndpointID != "" {
-			agent.EndpointID = msg.EndpointID
-		}
 		if msg.Version != "" {
 			agent.Version = msg.Version
+		}
+		if msg.Platform != "" {
+			agent.Platform = msg.Platform
+		}
+		if msg.StartedAt != "" {
+			agent.StartedAt = msg.StartedAt
 		}
 		agent.IPCReady = msg.IPCReady
 		rt.mu.Unlock()
@@ -1730,6 +1762,10 @@ func (rt *Runtime) handleAgentMessage(agent *AgentClient, raw json.RawMessage) {
 			SNR       *float64 `json:"snr"`
 		}
 		_ = json.Unmarshal(raw, &msg)
+		rt.mu.Lock()
+		agent.ObservedPackets++
+		agent.LastObservedAt = time.Now().UTC().Format(time.RFC3339)
+		rt.mu.Unlock()
 		rt.enqueuePacket(PacketEvent{Source: "agent:" + agent.ID, RawHex: msg.RawHex, Timestamp: msg.Timestamp, RSSI: msg.RSSI, SNR: msg.SNR})
 	case "sendRawResult":
 		var msg struct {

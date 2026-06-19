@@ -28,10 +28,9 @@ services:
     environment:
       # Reach the backend over the compose network. /agent is the agent endpoint.
       HOPBACK_BACKEND_WS: ws://hopbackd:3000/agent
-      # Must match service.agentSecret in config.yaml.
-      HOPBACK_AGENT_SECRET: change-this-secret
-      HOPBACK_ENDPOINT_ID: kololec
-      HOPBACK_AGENT_ID: kololec-agent
+      # Must match the agentSecret of one endpoint in config.yaml. The backend
+      # uses it to associate this agent with that endpoint automatically.
+      HOPBACK_AGENT_SECRET: change-this-endpoint-secret
       # Radio backend. Direct companion TCP (e.g. meshcore-proxy) works well in
       # containers. For an IPC unix socket, bind-mount it and use ipc+unix://.
       MESHCORE_URI: tcp://10.0.0.30:5000

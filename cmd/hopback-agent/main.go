@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,9 @@ import (
 	"github.com/meshcore-cz/hopback/internal/buildinfo"
 )
 
+// startedAt records the agent process start so the backend can show agent uptime.
+var startedAt = time.Now().UTC().Format(time.RFC3339)
+
 const (
 	reconnectDelay = 3 * time.Second
 )
@@ -23,8 +27,6 @@ const (
 type AgentConfig struct {
 	BackendURL     string
 	Secret         string
-	EndpointID     string
-	AgentID        string
 	MeshCoreURI    string
 	MeshCoreDevice string
 }
@@ -69,13 +71,8 @@ func loadAgentConfig() (AgentConfig, error) {
 	cfg := AgentConfig{
 		BackendURL:     mustEnv("HOPBACK_BACKEND_WS"),
 		Secret:         mustEnv("HOPBACK_AGENT_SECRET"),
-		EndpointID:     mustEnv("HOPBACK_ENDPOINT_ID"),
-		AgentID:        envValue("HOPBACK_AGENT_ID"),
 		MeshCoreURI:    meshURI,
 		MeshCoreDevice: envValue("MESHCORE_DEVICE"),
-	}
-	if cfg.AgentID == "" {
-		cfg.AgentID = "agent-" + cfg.EndpointID
 	}
 	return cfg, nil
 }
@@ -89,9 +86,8 @@ func (a *Agent) connectBackend() {
 	}
 	u.Path = "/agent"
 	q := u.Query()
+	// The backend derives this agent's endpoint and id from the secret alone.
 	q.Set("secret", a.cfg.Secret)
-	q.Set("id", a.cfg.AgentID)
-	q.Set("endpointId", a.cfg.EndpointID)
 	u.RawQuery = q.Encode()
 
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
@@ -162,11 +158,11 @@ func (a *Agent) sendMeshPacket(rawHex string) error {
 
 func (a *Agent) sendBackendStatus() {
 	_ = a.sendBackend(map[string]any{
-		"type":       "hello",
-		"id":         a.cfg.AgentID,
-		"version":    buildinfo.Version,
-		"endpointId": a.cfg.EndpointID,
-		"ipcReady":   a.radio.Ready(),
+		"type":      "hello",
+		"version":   buildinfo.Version,
+		"ipcReady":  a.radio.Ready(),
+		"platform":  runtime.GOOS + "/" + runtime.GOARCH,
+		"startedAt": startedAt,
 	})
 }
 

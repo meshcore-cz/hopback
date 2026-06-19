@@ -21,7 +21,6 @@
 	import { t, locale } from '$lib/i18n/index.svelte';
 	import LanguageSwitcher from '$lib/i18n/LanguageSwitcher.svelte';
 	import TestHistoryTable from '$lib/TestHistoryTable.svelte';
-	import { APP_VERSION } from '$lib/version';
 
 	interface EndpointOption {
 		id: string;
@@ -538,7 +537,7 @@
 								<span class="block truncate font-semibold text-neutral-950">{endpoint.name}</span>
 								<span class="mt-1 flex min-w-0 items-center gap-1 text-sm text-neutral-600">
 									<MapPin size={15} class="shrink-0" />
-									<span class="truncate">{endpoint.location?.label || endpoint.region}</span>
+									<span class="truncate">{endpoint.region}</span>
 								</span>
 							</span>
 							<span
@@ -635,16 +634,4 @@
 			{/if}
 		</section>
 	{/if}
-
-	<footer class="pb-3 text-center text-sm text-neutral-500">
-		{t('footer.credit')}
-		<a
-			class="font-medium text-neutral-700 hover:text-teal-800"
-			href="https://github.com/meshcore-cz/hopback"
-		>
-			meshcore-cz/hopback
-		</a>
-		<span class="mx-1 text-neutral-400">·</span>
-		<span>v{APP_VERSION}</span>
-	</footer>
 </main>

@@ -3,6 +3,7 @@
 	import favicon from '$lib/assets/favicon.png';
 	import { onMount } from 'svelte';
 	import { initLocale } from '$lib/i18n/index.svelte';
+	import Footer from '$lib/Footer.svelte';
 
 	let { children } = $props();
 
@@ -14,3 +15,4 @@
 	<title>Hopback</title>
 </svelte:head>
 {@render children()}
+<Footer />

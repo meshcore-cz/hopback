@@ -79,7 +79,7 @@ cp config.yaml.example config.yaml   # edit service.agentSecret, endpoints, keys
 docker compose up -d
 ```
 
-Open `http://localhost:3000`. The backend reads `config.yaml` mounted read-only at `/app/config.yaml` and stores its SQLite database in the `hopback-data` volume (`databasePath: data/hopback.sqlite` resolves to `/app/data`). The agent reaches the backend over the internal compose network at `ws://hopbackd:3000/agent`; set `HOPBACK_AGENT_SECRET` to match `service.agentSecret` and point `MESHCORE_URI` at your radio.
+Open `http://localhost:3000`. The backend reads `config.yaml` mounted read-only at `/app/config.yaml` and stores its SQLite database in the `hopback-data` volume (`databasePath: data/hopback.sqlite` resolves to `/app/data`). The agent reaches the backend over the internal compose network at `ws://hopbackd:3000/agent`; set `HOPBACK_AGENT_SECRET` to match the endpoint's `agentSecret` and point `MESHCORE_URI` at your radio.
 
 Update to a newer image with:
 
@@ -104,9 +104,7 @@ Agent only (configuration comes from environment variables; no `.env` file neede
 ```sh
 docker run -d --name hopback-agent \
   -e HOPBACK_BACKEND_WS=ws://hopback-host:3000/agent \
-  -e HOPBACK_AGENT_SECRET=change-this-secret \
-  -e HOPBACK_ENDPOINT_ID=kololec \
-  -e HOPBACK_AGENT_ID=kololec-agent \
+  -e HOPBACK_AGENT_SECRET=change-this-endpoint-secret \
   -e MESHCORE_URI=tcp://10.0.0.30:5000 \
   ghcr.io/meshcore-cz/hopback-agent:latest
 ```
@@ -204,13 +202,14 @@ coreScope:
 
 endpoints:
   - id: kololec
-    host: test.kololec.cz
     name: 'Kololeč Test'
     region: Okres Litoměřice, Ústecký Kraj, Česká Republika
     publicKey: 5430101DB427C7E403D1D3C619C056C1BE969FC785ECC7B01774B5AD4BFCCA2B
     type: 1
+    # Unique per-endpoint agent secret; the agent presents this and the backend
+    # associates it with this endpoint. Falls back to service.agentSecret.
+    agentSecret: change-this-endpoint-secret
     location:
-      label: Kololeč, Okres Litoměřice, Ústecký Kraj, Česká Republika
       lat: 50.478
       lon: 13.975
 ```
@@ -219,17 +218,19 @@ Backend/web secrets belong in the ignored local `config.yaml`. For packet decryp
 
 `config.yaml` is ignored by git. Commit changes to `config.yaml.example` when you want to change the shared template.
 
-Hopback fails at startup when required backend/web configuration is missing or malformed. In the current central-decrypt flow, that includes `service.agentSecret` and an endpoint private key through either `endpoint.privateKey` or `service.privateKey`.
+Hopback fails at startup when required backend/web configuration is missing or malformed. In the current central-decrypt flow, that includes a unique `agentSecret` per endpoint (via `endpoint.agentSecret` or the `service.agentSecret` fallback) and an endpoint private key through either `endpoint.privateKey` or `service.privateKey`.
 
 ## Agent
+
+> Operating a node? See [docs/running-an-agent.md](docs/running-an-agent.md) for a
+> step-by-step operator guide, including how to get a connection secret from your
+> regional instance.
 
 The included agent can use either the existing meshcore-go JSON IPC daemon or a direct MeshCore companion TCP connection such as `meshcore-proxy`. Agent settings live in `.env`:
 
 ```env
 HOPBACK_BACKEND_WS=ws://127.0.0.1:3000/agent
-HOPBACK_AGENT_SECRET=change-this-secret
-HOPBACK_ENDPOINT_ID=kololec
-HOPBACK_AGENT_ID=kololec-agent
+HOPBACK_AGENT_SECRET=change-this-endpoint-secret
 MESHCORE_URI=ipc+unix://~/Library/Caches/mc/backend.sock
 # MESHCORE_URI=ipc+tcp://127.0.0.1:1738
 # MESHCORE_URI=tcp://10.0.0.30:5000
@@ -244,7 +245,7 @@ make agent
 
 After `make build`, the compiled agent is available at `bin/hopback-agent`.
 
-`HOPBACK_AGENT_SECRET` must match `service.agentSecret` from the backend/web `config.yaml`.
+`HOPBACK_AGENT_SECRET` must match one endpoint's `agentSecret` in the backend/web `config.yaml` (or `service.agentSecret` when the endpoint omits its own). The backend uses this secret to associate the agent with its endpoint automatically — no endpoint or agent id is configured on the agent.
 
 `MESHCORE_URI` takes precedence. The older `MESHCORE_IPC_PATH`, `MESHCORE_IPC_HOST`, and `MESHCORE_IPC_PORT` settings are still accepted when `MESHCORE_URI` is empty.
 

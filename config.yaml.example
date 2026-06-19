@@ -22,6 +22,10 @@ service:
   # Re-send the endpoint reply as a flood if a direct-routed reply isn't ACKed
   # within this many seconds, so a stale path never loses the message. 0 disables.
   replyFloodFallbackSeconds: 8
+  # Default agent secret. Each endpoint authenticates its agent with a unique
+  # agentSecret (see endpoints[].agentSecret); this service-level value is only a
+  # fallback for endpoints that omit their own, and is unambiguous only with a
+  # single endpoint.
   agentSecret: change-this-secret
   # privateKey: 128hex-private-key
   # publicKey: 64hex-public-key
@@ -36,18 +40,20 @@ coreScope:
 
 endpoints:
   - id: kololec
-    host: test.kololec.cz
     name: Kololeč
     region: Okres Litoměřice, Ústecký Kraj, Česká Republika
     publicKey: 5430101DB427C7E403D1D3C619C056C1BE969FC785ECC7B01774B5AD4BFCCA2B
     # Contact type: 1 Companion, 2 Repeater, 3 Room Server, 4 Sensor.
     type: 1
+    # Unique per-endpoint agent secret. The connecting agent presents only this
+    # secret (HOPBACK_AGENT_SECRET); the backend matches it to associate the agent
+    # with this endpoint. Must be unique across endpoints. Falls back to
+    # service.agentSecret when omitted.
+    agentSecret: change-this-endpoint-secret
     # Required for central backend decryption/replies. Omit if the endpoint agent verifies locally.
     # Use either the original identity seed (64 hex) or a MeshCore Companion expanded key
     # (128 hex). Do not pass a 128-hex expanded key to identity-seed encoders.
     # privateKey: 128hex-private-key
-    # agentId: kololec-agent
     location:
-      label: Kololeč, Okres Litoměřice, Ústecký Kraj, Česká Republika
       lat: 50.478
       lon: 13.975

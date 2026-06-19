@@ -8,9 +8,7 @@ export interface EndpointConfig {
 	region: string;
 	publicKey: string;
 	type?: number;
-	host?: string;
 	location?: {
-		label: string;
 		lat?: number;
 		lon?: number;
 	};
@@ -198,7 +196,6 @@ export interface RuntimeStatus {
 		name: string;
 		region: string;
 		publicKey: string;
-		host?: string;
 		location?: EndpointConfig['location'];
 		ready: boolean;
 		connected: boolean;
@@ -213,6 +210,14 @@ export interface RuntimeStatus {
 		ipcReady: boolean;
 		connectedAt: string;
 		lastSeenAt: string;
+		/** Operating system / architecture the agent runs on, e.g. "linux/arm64". */
+		platform?: string;
+		/** When the agent process started (RFC3339), for uptime display. */
+		startedAt?: string;
+		/** Count of raw packets this agent has relayed to the backend. */
+		observedPackets: number;
+		/** When the agent last relayed a packet (RFC3339). */
+		lastObservedAt?: string;
 	}>;
 	nodes: number;
 	observers: number;
