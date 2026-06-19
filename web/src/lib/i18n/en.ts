@@ -225,13 +225,18 @@ export const en = {
 	'obs.view.table': 'Observations',
 	'obs.view.console': 'Console',
 	'console.empty': 'Waiting for the first events.',
-	'console.event.outboundSeen': 'Message seen on the mesh',
-	'console.event.endpointSaw': 'Endpoint received the message',
-	'console.event.replySent': 'Endpoint broadcast the reply',
-	'console.event.replySeen': 'Reply seen on the mesh',
-	'console.event.ackSeen': 'Reply ACK seen on the mesh',
-	'console.event.ackReturned': 'Round trip complete — endpoint got the ACK',
-	'console.event.retry': '{kind} re-sent',
+	'console.event.outboundSeen': 'User message {hash} seen on the mesh',
+	'console.event.endpointSaw': 'User message {hash} received by the endpoint {endpoint}',
+	'console.event.outboundAck':
+		'Acknowledgment {hash} of the user message {msgHash} sent by the endpoint {endpoint}',
+	'console.event.replySent': 'Reply message {hash} broadcast by the endpoint {endpoint}',
+	'console.event.replySeen': 'Reply message {hash} seen on the mesh',
+	'console.event.ackSeen': 'Acknowledgment {hash} of the reply message {msgHash} seen on the mesh',
+	'console.event.ackReturned':
+		'Round trip complete — endpoint {endpoint} received the acknowledgment {hash}',
+	'console.event.retry': '{packet} {hash} re-sent',
+	'console.packet.user msg': 'user message',
+	'console.packet.reply': 'reply message',
 	'obs.path.outOfRange':
 		'Resolved over 2000 km from the endpoint — likely a path-hash collision, excluded from distances and the map.',
 
@@ -240,6 +245,10 @@ export const en = {
 	'route.routing': 'Routing',
 	'route.hops': 'Hops',
 	'route.deliveryTime': 'Delivery time',
+	'route.deliveryTimeEstimated': 'Estimated delivery time',
+	'route.deliveryTimeEstimatedHint':
+		"We can't measure the exact delivery time because we don't know when your app actually sent the message — only when it first appeared on the mesh. This is an estimate from that first sighting.",
+	'route.deliveryConfirmationTime': 'Delivery + confirmation time',
 	'route.observations': 'Observations',
 	'route.observers': 'Observers',
 	'route.paths': 'Paths',

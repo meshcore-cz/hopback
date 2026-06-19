@@ -11,6 +11,7 @@
 		CheckCircle2,
 		Circle,
 		CircleDot,
+		CircleHelp,
 		ClipboardList,
 		Clock,
 		Copy,
@@ -145,9 +146,36 @@
 	let returned = $derived(test?.observations.filter((item) => item.direction === 'return') ?? []);
 	let filteredObservations = $derived(
 		test?.observations.filter(
-			(observation) => !selectedKinds.length || selectedKinds.includes(packetKindLabel(observation))
+			(observation) => !selectedKinds.length || selectedKinds.includes(kindRetryKey(observation))
 		) ?? []
 	);
+	// Maps a packet hash to its re-send rank within its kind: 0 = original transmission,
+	// 1 = first retry, 2 = second, … Distinct content hashes for a kind are distinct
+	// transmissions, ordered by when each first appeared on the mesh.
+	let retryRankByHash = $derived.by(() => {
+		type HashTime = { hash: string; at: number };
+		const firstSeen: Record<string, { kind: string; at: number }> = {};
+		for (const observation of test?.observations ?? []) {
+			if (!observation.packetHash) continue;
+			const at = new Date(observation.createdAt).getTime();
+			const prev = firstSeen[observation.packetHash];
+			if (!prev || at < prev.at)
+				firstSeen[observation.packetHash] = { kind: packetKindLabel(observation), at };
+		}
+		const byKind: Record<string, HashTime[]> = {};
+		for (const hash of Object.keys(firstSeen)) {
+			const entry = firstSeen[hash];
+			const list = byKind[entry.kind] ?? (byKind[entry.kind] = []);
+			list.push({ hash, at: entry.at });
+		}
+		const ranks: Record<string, number> = {};
+		for (const list of Object.values(byKind)) {
+			list.sort((a, b) => a.at - b.at);
+			list.forEach((item, index) => (ranks[item.hash] = index));
+		}
+		return ranks;
+	});
+
 	let hasObserved = $derived(Boolean(test?.observations.length));
 	let expiredWithoutPackets = $derived(
 		Boolean(test && test.status === 'expired' && test.observations.length === 0)
@@ -428,6 +456,32 @@
 		return t(`kind.${kind}`);
 	}
 
+	// Raw filter key combining a packet kind with its re-send rank: "reply" for the
+	// original, "reply^1" for the first retry, etc. Used so retries filter separately.
+	function kindRetryKey(observation: PacketObservation) {
+		const base = packetKindLabel(observation);
+		const rank = observation.packetHash ? (retryRankByHash[observation.packetHash] ?? 0) : 0;
+		return rank > 0 ? `${base}^${rank}` : base;
+	}
+
+	// Translated display for a raw kind+rank key, e.g. "reply^1" → "reply ^1".
+	function kindKeyLabel(key: string) {
+		const caret = key.lastIndexOf('^');
+		return caret === -1
+			? kindLabel(key)
+			: `${kindLabel(key.slice(0, caret))} ^${key.slice(caret + 1)}`;
+	}
+
+	// Kind label annotated with its re-send rank, e.g. "reply ^1" for the first retry.
+	function kindLabelWithRetry(observation: PacketObservation) {
+		return kindKeyLabel(kindRetryKey(observation));
+	}
+
+	// Sentence-case a label so it reads consistently when it opens a console title.
+	function capitalize(value: string) {
+		return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
+	}
+
 	function packetKindClass(observation: PacketObservation) {
 		if (isAckPacket(observation)) {
 			return observation.direction === 'outbound'
@@ -468,6 +522,14 @@
 
 	function uniqueObserverCount(items: PacketObservation[]) {
 		return uniqueObserverKeys(items).length;
+	}
+
+	// A node that transmitted a packet shouldn't count as an observer of it: our
+	// endpoint hears its own outgoing reply/ACK over RF, but that self-echo isn't a
+	// real third-party sighting. Drop it before counting observers of endpoint-sent
+	// packets (the reply, the outbound ACK).
+	function externalObservers(items: PacketObservation[], current: DiagnosticTest) {
+		return items.filter((item) => !isEndpointObservation(item, current));
 	}
 
 	// "observed / active" — how many of the currently-live network observers
@@ -653,12 +715,30 @@
 				endpointMessage?.createdAt || current.outboundEndpointSeenAt
 			);
 		}
-		// Anchor to when the endpoint actually broadcast the reply, not the first
-		// time a (possibly distant) observer saw it: the reply ACK is captured by the
-		// local endpoint agent before remote observers see the reply flooding, so
-		// firstMessage can be later than firstAck and yield a bogus negative span.
+		// Measure from the FIRST reply broadcast — never a later flood-fallback retry —
+		// to the first reply ACK that came back. The first transmission is the earliest
+		// of: the recorded broadcast time, the endpoint's own reply sighting, and the
+		// first reply seen on the mesh. We floor those to the endpoint's receipt of the
+		// user message, so a clock-skewed broadcast that lands implausibly early (before
+		// the endpoint even had the message) is discarded rather than inflating the span.
+		const endpointReply = firstObservation(
+			messages.filter((item) => isEndpointObservation(item, current))
+		);
+		const floorMs = current.outboundEndpointSeenAt
+			? new Date(current.outboundEndpointSeenAt).getTime()
+			: 0;
+		const startCandidates = [
+			current.replyBroadcastAt,
+			endpointReply?.createdAt,
+			firstMessage?.createdAt
+		]
+			.filter((value): value is string => Boolean(value))
+			.map((value) => new Date(value).getTime())
+			.filter((ms) => Number.isFinite(ms) && ms >= floorMs);
+		const replyStart = startCandidates.length
+			? new Date(Math.min(...startCandidates)).toISOString()
+			: current.replyBroadcastAt || endpointReply?.createdAt || firstMessage?.createdAt;
 		const firstAck = firstObservation(acks);
-		const replyStart = current.replyBroadcastAt || firstMessage?.createdAt;
 		return duration(replyStart, firstAck?.createdAt || current.replyAckSeenAt);
 	}
 
@@ -717,7 +797,7 @@
 	}
 
 	function packetKindOptions() {
-		return new SetLike((test?.observations ?? []).map(packetKindLabel)).values;
+		return new SetLike((test?.observations ?? []).map(kindRetryKey)).values;
 	}
 
 	function toggleKind(kind: string) {
@@ -951,6 +1031,13 @@
 		setTimeout(() => mapInstance?.invalidateSize(), 0);
 	}
 
+	// Console offsets are always forward from the first event (the stream is clamped
+	// monotonic upstream), so they read as "+Xms" / "+X.XXs".
+	function consoleOffset(ms: number) {
+		if (ms < 1000) return `+${Math.round(ms)}ms`;
+		return `+${(ms / 1000).toFixed(2)}s`;
+	}
+
 	function relativeTime(value: string, start: string) {
 		const delta = new Date(value).getTime() - new Date(start).getTime();
 		if (!Number.isFinite(delta)) return '+?';
@@ -1070,11 +1157,6 @@
 		return Math.max(0, hashes.size - 1);
 	}
 
-	function optionRetries(option: DeliveryPathOption) {
-		const kinds = option.kinds?.length ? option.kinds : [option.kind];
-		return Math.max(0, ...kinds.map(retriesForKind));
-	}
-
 	// Tooltip text for a conflicted delivery hop: the chosen node plus the rivals.
 	function conflictTitle(row: DeliveryPathRow) {
 		const names = (row.alternatives ?? []).map(
@@ -1120,63 +1202,144 @@
 		return t('detail.agent.offline', { name: current.endpointName });
 	}
 
-	type ConsoleTone = 'start' | 'endpoint' | 'reply' | 'ack' | 'retry' | 'done';
+	type ConsoleTone = 'start' | 'endpoint' | 'outboundAck' | 'reply' | 'ack' | 'retry' | 'done';
 	type ConsoleEvent = {
 		id: string;
 		time: string;
+		/** Logical position in the round trip; the console orders by this, not raw time. */
+		order: number;
+		/** Clamped, monotonic offset (ms) from the first event, used for display. */
+		relMs: number;
 		tone: ConsoleTone;
+		/** Title text; contains literal `{hash}`/`{msgHash}` slots where chips render. */
 		title: string;
+		/** Content hash of the packet this event is about, for the inline chip + link. */
+		hash: string | null;
+		/** Secondary hash for `{msgHash}` — e.g. the message an ACK acknowledges. */
+		msgHash: string | null;
 		detail: string;
 	};
 
 	const CONSOLE_TONE: Record<ConsoleTone, { dot: string; text: string }> = {
 		start: { dot: 'bg-teal-500', text: 'text-teal-700' },
 		endpoint: { dot: 'bg-teal-600', text: 'text-teal-800' },
+		outboundAck: { dot: 'bg-blue-600', text: 'text-blue-700' },
 		reply: { dot: 'bg-orange-500', text: 'text-orange-700' },
 		ack: { dot: 'bg-pink-500', text: 'text-pink-700' },
 		retry: { dot: 'bg-amber-500', text: 'text-amber-700' },
 		done: { dot: 'bg-emerald-600', text: 'text-emerald-700' }
 	};
 
-	// A curated, chronological event stream: the round-trip milestones plus notable
-	// packets (retries). Far shorter than the 300-row table, richer than the top bar.
+	// A curated event stream of the round-trip milestones plus notable packets
+	// (retries). It's ordered by the logical sequence of the round trip — not raw
+	// timestamps — because some milestones (e.g. replyBroadcastAt) can carry a
+	// stale/clock-skewed time that would otherwise jump them out of order. Displayed
+	// offsets are clamped to stay non-negative and monotonic, so a skewed timestamp
+	// reads as +0ms in its proper slot rather than a nonsensical negative jump.
 	function consoleEvents(current: DiagnosticTest): ConsoleEvent[] {
-		const events: ConsoleEvent[] = [];
+		type Raw = Omit<ConsoleEvent, 'relMs'>;
+		const raws: Raw[] = [];
 		const add = (
 			time: string | null | undefined,
+			order: number,
 			tone: ConsoleTone,
 			title: string,
-			detail: string
+			hash: string | null | undefined,
+			detail: string,
+			msgHash?: string | null
 		) => {
-			if (time) events.push({ id: `${tone}:${title}:${time}`, time, tone, title, detail });
+			if (time)
+				raws.push({
+					id: `${tone}:${title}:${time}`,
+					time,
+					order,
+					tone,
+					title,
+					hash: hash || null,
+					msgHash: msgHash || null,
+					detail
+				});
 		};
 		const outMsgs = messageObservations(outbound);
 		const retMsgs = messageObservations(returned);
 		const endpointOut = firstObservation(outMsgs.filter((o) => isEndpointObservation(o, current)));
+		const ep = { endpoint: current.endpointName };
+		// Endpoint-leg steps (receive/send) show the endpoint↔user hop distance instead
+		// of an observer count — the endpoint is the sender/receiver there, not a
+		// third-party sighting.
+		const endpointHops = hopLabel(endpointOut?.hopCount ?? bestHopCount(outMsgs));
 		add(
 			current.outboundSeenAt,
+			10,
 			'start',
 			t('console.event.outboundSeen'),
+			current.outboundHash,
 			observerCountLabel(outMsgs)
 		);
 		add(
 			current.outboundEndpointSeenAt,
+			20,
 			'endpoint',
-			t('console.event.endpointSaw'),
-			hopLabel(endpointOut?.hopCount ?? bestHopCount(outMsgs))
+			t('console.event.endpointSaw', ep),
+			endpointOut?.packetHash || current.outboundHash,
+			endpointHops
 		);
-		add(current.replyBroadcastAt, 'reply', t('console.event.replySent'), '');
+		// The endpoint's acknowledgment answering the user's message, sent before the
+		// reply. Names both the ACK packet ({hash}) and the message it acks ({msgHash}).
+		add(
+			current.outboundAckSeenAt,
+			28,
+			'outboundAck',
+			t('console.event.outboundAck', ep),
+			current.outboundAckHash,
+			endpointHops,
+			current.outboundHash
+		);
+		add(
+			current.replyBroadcastAt,
+			30,
+			'reply',
+			t('console.event.replySent', ep),
+			current.replyHash,
+			endpointHops
+		);
+		// The reply is sent by the endpoint, so its own RF self-echo isn't a real
+		// observer — count only third-party sightings.
+		const replyObservers = externalObservers(retMsgs, current);
 		add(
 			current.returnSeenAt,
+			40,
 			'reply',
 			t('console.event.replySeen'),
-			retMsgs.length ? observerCountLabel(retMsgs) : ''
+			current.returnHash || current.replyHash,
+			replyObservers.length ? observerCountLabel(replyObservers) : ''
 		);
-		add(current.replyAckSeenAt, 'ack', t('console.event.ackSeen'), '');
-		add(current.replyEndpointAckAt, 'done', t('console.event.ackReturned'), '');
+		// The reply ACK is sent by the user, so the endpoint is a genuine observer —
+		// count all of them, no self-echo exclusion.
+		const retAcks = ackObservations(returned);
+		add(
+			current.replyAckSeenAt,
+			50,
+			'ack',
+			t('console.event.ackSeen'),
+			current.replyAckHash,
+			retAcks.length ? observerCountLabel(retAcks) : '',
+			current.returnHash || current.replyHash
+		);
+		add(
+			current.replyEndpointAckAt,
+			60,
+			'done',
+			t('console.event.ackReturned', ep),
+			current.replyAckHash,
+			endpointHops
+		);
 		// Retries: each new content hash for a message kind (after the first) is a
-		// fresh transmission, i.e. a re-send.
-		for (const kind of ['user msg', 'reply'] as const) {
+		// fresh transmission, i.e. a re-send. Slotted next to the kind they re-send.
+		for (const [kind, order] of [
+			['user msg', 25],
+			['reply', 45]
+		] as const) {
 			const ordered = (current.observations ?? [])
 				.filter((o) => packetKindLabel(o) === kind && o.packetHash)
 				.slice()
@@ -1188,13 +1351,27 @@
 				if (seen.size > 1)
 					add(
 						o.createdAt,
+						order,
 						'retry',
-						t('console.event.retry', { kind: kindLabel(kind) }),
+						t('console.event.retry', { packet: capitalize(t(`console.packet.${kind}`)) }),
+						o.packetHash,
 						tn('unit.retry', seen.size - 1)
 					);
 			}
 		}
-		return events.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+		raws.sort(
+			(a, b) => a.order - b.order || new Date(a.time).getTime() - new Date(b.time).getTime()
+		);
+		// Clamp display offsets to the first event so they never run negative or
+		// backwards, even when an underlying timestamp is skewed.
+		const base = raws.length ? new Date(raws[0].time).getTime() : 0;
+		let prev = 0;
+		return raws.map((raw) => {
+			const delta = new Date(raw.time).getTime() - base;
+			const relMs = Math.max(prev, Number.isFinite(delta) ? delta : prev, 0);
+			prev = relMs;
+			return { ...raw, relMs };
+		});
 	}
 
 	class SetLike<T> {
@@ -1474,7 +1651,7 @@
 										type="button"
 										onclick={() => toggleKind(kind)}
 									>
-										{kindLabel(kind)}
+										{kindKeyLabel(kind)}
 									</button>
 								{/each}
 							</div>
@@ -1514,7 +1691,7 @@
 													<span
 														class={`inline-flex items-center rounded px-1.5 py-0.5 font-semibold ${packetKindClass(observation)}`}
 													>
-														{kindLabel(packetKindLabel(observation))}
+														{kindLabelWithRetry(observation)}
 													</span>
 												</td>
 												<td class="px-2 py-2">
@@ -1632,24 +1809,51 @@
 	</div>
 {/snippet}
 
+{#snippet ConsoleHashChip(hash: string)}
+	<button
+		class="mono inline-flex shrink-0 items-center gap-0.5 rounded border border-neutral-300 bg-neutral-50 px-1 py-0.5 align-baseline font-semibold text-neutral-500 hover:border-teal-700 hover:bg-teal-50 hover:text-teal-900"
+		type="button"
+		style="font-size: 11px; line-height: 1;"
+		onclick={() => window.open(analyzerPacketUrl(hash), '_blank', 'noreferrer')}
+		title={t('route.openMessage')}
+	>
+		<span>{packetHashButtonLabel(hash)}</span>
+		<ExternalLink size={10} strokeWidth={2} />
+	</button>
+{/snippet}
+
 {#snippet ConsolePanel(current: DiagnosticTest)}
 	{@const events = consoleEvents(current)}
-	{@const firstSeen = firstPacketSeenAt(current)}
 	{#if events.length}
 		<ol class="relative ml-2 space-y-4 border-l border-neutral-200 py-1 pl-5">
 			{#each events as event, index (event.id)}
 				{@const tone = CONSOLE_TONE[event.tone]}
+				{@const segments = event.title.split(/(\{hash\}|\{msgHash\})/)}
 				<li class="console-event relative" style={`--row-index: ${index}`}>
 					<span
 						class={`absolute -left-[1.43rem] top-1 size-2.5 rounded-full ring-4 ring-white ${tone.dot}`}
 					></span>
 					<div class="flex items-baseline justify-between gap-3">
-						<p class="text-sm font-semibold text-neutral-900">{event.title}</p>
+						<p
+							class="flex flex-wrap items-baseline gap-x-1.5 text-sm font-semibold text-neutral-900"
+						>
+							{#each segments as segment}
+								{#if segment === '{hash}'}
+									{#if event.hash}{@render ConsoleHashChip(event.hash)}{/if}
+								{:else if segment === '{msgHash}'}
+									{#if event.msgHash}{@render ConsoleHashChip(event.msgHash)}{/if}
+								{:else if segment.trim()}
+									<span>{segment.trim()}</span>
+								{/if}
+							{/each}
+						</p>
 						<span class="mono shrink-0 text-[11px] text-neutral-400">
-							{firstSeen ? relativeTime(event.time, new Date(firstSeen).toISOString()) : ''}
+							{consoleOffset(event.relMs)}
 						</span>
 					</div>
-					{#if event.detail}
+					<!-- The final point closes the timeline; its detail (a stray hop count)
+					     would dangle below the last dot, so we omit it. -->
+					{#if event.detail && index !== events.length - 1}
 						<p class={`mt-0.5 text-xs font-medium ${tone.text}`}>{event.detail}</p>
 					{/if}
 				</li>
@@ -1883,14 +2087,6 @@
 								<span class="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">
 									{option.hopCount === 0 ? t('route.kind.direct') : hopLabel(option.hopCount)}
 								</span>
-								{#if optionRetries(option) > 0}
-									<span
-										class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
-										title={t('delivery.retriesHint')}
-									>
-										{tn('unit.retry', optionRetries(option))}
-									</span>
-								{/if}
 								{#if option.hashWidth}
 									<span
 										class="rounded bg-neutral-100 px-2 py-0.5 text-xs font-medium text-neutral-500"
@@ -2078,6 +2274,10 @@
 	{@const direction = icon === 'send' ? 'outbound' : 'return'}
 	{@const messages = messageObservations(observations)}
 	{@const acks = ackObservations(observations)}
+	<!-- Return messages (the reply) are sent by the endpoint, so its own RF self-echo
+	     isn't a real observer — exclude it from the observer count. -->
+	{@const observerMessages =
+		direction === 'return' && test ? externalObservers(messages, test) : messages}
 	{@const firstMessage = firstObservation(messages)}
 	{@const firstAck = firstObservation(acks)}
 	{@const directionHash =
@@ -2088,20 +2288,22 @@
 		icon === 'send'
 			? test?.outboundAckHash || firstAck?.packetHash
 			: test?.replyAckHash || firstAck?.packetHash}
-	{@const accent =
-		icon === 'send'
-			? {
-					text: 'text-teal-700',
-					softBg: 'bg-teal-50',
-					softBorder: 'border-teal-200',
-					iconBg: 'bg-teal-100 text-teal-700'
-				}
-			: {
-					text: 'text-orange-700',
-					softBg: 'bg-orange-50',
-					softBorder: 'border-orange-200',
-					iconBg: 'bg-orange-100 text-orange-700'
-				}}
+	{@const teal = {
+		text: 'text-teal-700',
+		softBg: 'bg-teal-50',
+		softBorder: 'border-teal-200',
+		iconBg: 'bg-teal-100 text-teal-700'
+	}}
+	{@const orange = {
+		text: 'text-orange-700',
+		softBg: 'bg-orange-50',
+		softBorder: 'border-orange-200',
+		iconBg: 'bg-orange-100 text-orange-700'
+	}}
+	{@const accent = icon === 'send' ? teal : orange}
+	<!-- The ACK confirming this leg's message travels the OPPOSITE direction, so its
+	     box carries the other leg's accent colour as a visual cue. -->
+	{@const ackAccent = icon === 'send' ? orange : teal}
 	<section class="rounded-md border border-neutral-300 bg-white p-4 shadow-sm">
 		<div class="mb-4 flex items-center justify-between gap-3">
 			<div class="flex min-w-0 items-center gap-2">
@@ -2130,15 +2332,29 @@
 		</div>
 
 		{#if observations.length}
+			{@const deliveryValue = test
+				? deliveryTime(direction, messages, acks, test)
+				: t('common.pending')}
+			{@const deliveryPending = deliveryValue === t('common.pending')}
+			{@const retries = retriesForKind(icon === 'send' ? 'user msg' : 'reply')}
 			<div
 				class={`flex items-stretch justify-between gap-3 rounded-lg border ${accent.softBorder} ${accent.softBg} p-3`}
 			>
 				<div class="min-w-0">
-					<p class="text-xs font-medium uppercase tracking-wide text-neutral-500">
-						{t('route.deliveryTime')}
+					<p
+						class="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-neutral-500"
+					>
+						{icon === 'send'
+							? t('route.deliveryTimeEstimated')
+							: t('route.deliveryConfirmationTime')}
+						{#if icon === 'send'}
+							<span class="cursor-help" title={t('route.deliveryTimeEstimatedHint')}>
+								<CircleHelp size={13} class="shrink-0 text-neutral-400" />
+							</span>
+						{/if}
 					</p>
 					<p class="mt-0.5 truncate text-2xl font-bold text-neutral-950">
-						{test ? deliveryTime(direction, messages, acks, test) : t('common.pending')}
+						{icon === 'send' && !deliveryPending ? '~' : ''}{deliveryValue}
 					</p>
 				</div>
 				<div class="flex flex-col items-end justify-center gap-1 text-right">
@@ -2149,13 +2365,9 @@
 						{routeKind(observations)}
 					</span>
 					<span class="text-xs font-medium text-neutral-500">
-						{deliveryHops(direction, messages, acks, test)}
+						{deliveryHops(direction, messages, acks, test)}{#if retries > 0}
+							· {tn('unit.retry', retries)}{/if}
 					</span>
-					{#if retriesForKind(icon === 'send' ? 'user msg' : 'reply') > 0}
-						<span class="text-xs font-medium text-amber-600" title={t('delivery.retriesHint')}>
-							{tn('unit.retry', retriesForKind(icon === 'send' ? 'user msg' : 'reply'))}
-						</span>
-					{/if}
 				</div>
 			</div>
 
@@ -2173,7 +2385,7 @@
 						<p class="truncate text-xs">{t('route.observers')}</p>
 					</div>
 					<p class="mt-1 whitespace-nowrap font-semibold tabular-nums text-neutral-900">
-						{observerCoverage(messages)}
+						{observerCoverage(observerMessages)}
 					</p>
 				</div>
 				<div class="rounded-md border border-neutral-200 bg-neutral-50/70 p-2.5">
@@ -2197,10 +2409,10 @@
 			</div>
 
 			<div
-				class={`mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border ${accent.softBorder} ${accent.softBg} p-3 text-sm`}
+				class={`mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border ${ackAccent.softBorder} ${ackAccent.softBg} p-3 text-sm`}
 			>
 				<div class="flex items-center gap-2">
-					<CheckCircle2 size={16} class={acks.length ? accent.text : 'text-neutral-300'} />
+					<CheckCircle2 size={16} class={acks.length ? ackAccent.text : 'text-neutral-300'} />
 					<div>
 						<p class="text-xs font-medium text-neutral-500">{ackLabel(acks, icon === 'send')}</p>
 						<p class="font-semibold text-neutral-900">

@@ -41,9 +41,9 @@ export const cs: Record<MessageKey | string, string> = {
 	'unit.observer.one': '{n} pozorovatel',
 	'unit.observer.few': '{n} pozorovatelé',
 	'unit.observer.many': '{n} pozorovatelů',
-	'unit.retry.one': '{n} pokus',
-	'unit.retry.few': '{n} pokusy',
-	'unit.retry.many': '{n} pokusů',
+	'unit.retry.one': '{n} opakovaný pokus',
+	'unit.retry.few': '{n} opakované pokusy',
+	'unit.retry.many': '{n} opakovaných pokusů',
 
 	'home.newTest.title': 'Nový test konektivity',
 	'home.newTest.subtitle':
@@ -226,13 +226,17 @@ export const cs: Record<MessageKey | string, string> = {
 	'obs.view.table': 'Pozorování',
 	'obs.view.console': 'Konzole',
 	'console.empty': 'Čekání na první události.',
-	'console.event.outboundSeen': 'Zpráva zachycena v síti',
-	'console.event.endpointSaw': 'Koncový bod přijal zprávu',
-	'console.event.replySent': 'Koncový bod odvysílal odpověď',
-	'console.event.replySeen': 'Odpověď zachycena v síti',
-	'console.event.ackSeen': 'ACK odpovědi zachyceno v síti',
-	'console.event.ackReturned': 'Oběh dokončen — koncový bod přijal ACK',
-	'console.event.retry': '{kind} odesláno znovu',
+	'console.event.outboundSeen': 'Uživatelská zpráva {hash} zachycena v síti',
+	'console.event.endpointSaw': 'Uživatelská zpráva {hash} přijata koncovým bodem {endpoint}',
+	'console.event.outboundAck':
+		'Potvrzení {hash} uživatelské zprávy {msgHash} odesláno koncovým bodem {endpoint}',
+	'console.event.replySent': 'Odpověď {hash} odvysílána koncovým bodem {endpoint}',
+	'console.event.replySeen': 'Odpověď {hash} zachycena v síti',
+	'console.event.ackSeen': 'Potvrzení {hash} odpovědi {msgHash} zachyceno v síti',
+	'console.event.ackReturned': 'Oběh dokončen — koncový bod {endpoint} přijal potvrzení {hash}',
+	'console.event.retry': '{packet} {hash} – opětovné odeslání',
+	'console.packet.user msg': 'uživatelská zpráva',
+	'console.packet.reply': 'odpověď',
 	'obs.path.outOfRange':
 		'Rozpoznáno přes 2000 km od koncového bodu — pravděpodobně kolize otisku cesty, vyloučeno ze vzdáleností a mapy.',
 
@@ -241,6 +245,10 @@ export const cs: Record<MessageKey | string, string> = {
 	'route.routing': 'Směrování',
 	'route.hops': 'Skoky',
 	'route.deliveryTime': 'Doba doručení',
+	'route.deliveryTimeEstimated': 'Odhadovaná doba doručení',
+	'route.deliveryTimeEstimatedHint':
+		'Přesnou dobu doručení nelze změřit, protože nevíme, kdy vaše aplikace zprávu skutečně odeslala — známe jen okamžik, kdy se poprvé objevila v síti. Toto je odhad od tohoto prvního zachycení.',
+	'route.deliveryConfirmationTime': 'Doba doručení + potvrzení',
 	'route.observations': 'Pozorování',
 	'route.observers': 'Pozorovatelé',
 	'route.paths': 'Cesty',

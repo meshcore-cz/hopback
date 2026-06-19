@@ -2213,7 +2213,11 @@ func (rt *Runtime) handleSendResult(testID, role string, ok bool, errText string
 	} else if role == "outboundAck" {
 		active.Test.ReplyStatus = ptr("Outbound ACK handed to MeshCore IPC")
 	} else {
-		active.Test.ReplyBroadcastAt = &now
+		// Keep the FIRST broadcast time; a flood-fallback re-send must not overwrite it,
+		// or the reply's delivery+confirmation span would be measured from the retry.
+		if active.Test.ReplyBroadcastAt == nil {
+			active.Test.ReplyBroadcastAt = &now
+		}
 		active.Test.ReplyStatus = ptr("Reply handed to MeshCore IPC")
 	}
 	active.Test.UpdatedAt = now
@@ -2223,11 +2227,31 @@ func (rt *Runtime) handleSendResult(testID, role string, ok bool, errText string
 	rt.enqueueWrite(func(e dbExec) error { return rt.store.UpdateFacts(e, testID, facts) })
 	rt.publishTest(rt.decorate(testCopy))
 	if ok && role == "outboundAck" {
+		rt.recordOwnOutboundAck(testCopy)
 		rt.sendReply(testCopy)
 	}
 	if ok && role == "replyMessage" {
 		go rt.replyFloodFallback(testID)
 	}
+}
+
+// recordOwnOutboundAck files the endpoint's own outbound ACK as an observation.
+// The MeshCore RF feed echoes self-sent TXT_MSGs back to us (which is why the
+// reply shows up under the agent observer), but not protocol ACK/PATH packets, so
+// without this the ACK our endpoint produced in answer to the user's message never
+// appears in the timeline. We replay the queued ACK hex through the normal
+// decode/match path with the endpoint agent as the observer; by send-confirmation
+// time the ACK's CRC is already in the index, so it matches. A later RF or analyzer
+// copy of the same packet dedupes against this one by observation key.
+func (rt *Runtime) recordOwnOutboundAck(t *Test) {
+	if t == nil || t.OutboundAckHex == nil {
+		return
+	}
+	agent := rt.agentForEndpoint(t.EndpointID)
+	if agent == nil {
+		return
+	}
+	rt.processPacket(PacketEvent{Source: "agent:" + agent.ID, RawHex: *t.OutboundAckHex, ReceivedAt: time.Now()})
 }
 
 // replyFloodFallback re-sends the reply as a flood if a direct-routed reply went
