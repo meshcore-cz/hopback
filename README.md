@@ -22,8 +22,8 @@ The service combines a simple web frontend, a central real-time backend, [CoreSc
 npm install
 cp config.yaml.example config.yaml
 cp .env.example .env
-npm run dev:server
-npm run dev
+make server
+make dev
 ```
 
 Open `http://localhost:5173`. In development, Vite serves the frontend and proxies runtime traffic to the Go backend at `http://127.0.0.1:3000`:
@@ -47,7 +47,7 @@ make stack
 
 Useful targets:
 
-- `npm run dev:server` starts the Go backend.
+- `make server` starts the Go backend.
 - `make dev` starts the Vite frontend.
 - `make agent` starts the Go meshcore-go IPC agent.
 - `make verify` runs format, type checks, lint, tests, and production build.
@@ -55,21 +55,28 @@ Useful targets:
 ## Production
 
 ```sh
-npm run build
-npm run start
+make build
+make start
 ```
 
-`npm run build` writes the static Svelte frontend into `cmd/hopbackd/frontend/`, builds `bin/hopbackd` with those assets embedded, and builds `bin/hopback-agent`. `npm run start` launches the single Go web process, which serves the UI, `/api/*`, `/ws`, and `/agent`.
+`make build` writes the static Svelte frontend into `cmd/hopbackd/frontend/`, builds `bin/hopbackd` with those assets embedded, and builds `bin/hopback-agent`. `make start` launches the single Go web process, which serves the UI, `/api/*`, `/ws`, and `/agent`.
+
+## Versioning
+
+```sh
+make release VERSION=v0.9.1
+```
+
+The release target checks the tree, updates `package.json` to the unprefixed version (`0.9.1`), commits it, tags `v0.9.1`, and pushes the branch and tag. Makefile targets read the package version and stamp it into the Go backend and agent with `-ldflags`.
 
 ### Server Install With Go
 
-From a checkout, build the frontend once before installing `hopbackd` so the UI is embedded into the Go binary:
+From a checkout, build the frontend and version-stamped Go binaries before installing them:
 
 ```sh
-npm ci
-npm run build:frontend:embed
-go install ./cmd/hopbackd
-go install ./cmd/hopback-agent
+make build
+install -m 755 bin/hopbackd /usr/local/bin/hopbackd
+install -m 755 bin/hopback-agent /usr/local/bin/hopback-agent
 ```
 
 Then run `hopbackd` from the directory containing `config.yaml`:
@@ -147,10 +154,10 @@ MESHCORE_IPC_PATH=~/Library/Caches/mc/backend.sock
 Run the agent with:
 
 ```sh
-npm run agent
+make agent
 ```
 
-After `npm run build`, the compiled agent is available at `bin/hopback-agent`.
+After `make build`, the compiled agent is available at `bin/hopback-agent`.
 
 `HOPBACK_AGENT_SECRET` must match `service.agentSecret` from the backend/web `config.yaml`.
 
@@ -167,8 +174,8 @@ The agent fails at startup if required `.env` values are missing or it cannot co
 ## Verification
 
 ```sh
-npm run check
-npm run lint
-npm run test
-npm run build
+make check
+make lint
+make test
+make build
 ```

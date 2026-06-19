@@ -47,6 +47,7 @@
 	import { packetKind } from '$lib/milestones';
 	import { t, tn, localeTag } from '$lib/i18n/index.svelte';
 	import LanguageSwitcher from '$lib/i18n/LanguageSwitcher.svelte';
+	import { APP_VERSION } from '$lib/version';
 
 	// Messages vs acks use deliberately contrasting hues so the two are easy to tell
 	// apart on the map: outbound message = teal, its ack = blue; return message = orange,
@@ -1812,6 +1813,17 @@
 			</section>
 		{/if}
 	{/if}
+	<footer class="pb-3 text-center text-sm text-neutral-500">
+		{t('footer.credit')}
+		<a
+			class="font-medium text-neutral-700 hover:text-teal-800"
+			href="https://github.com/meshcore-cz/hopback"
+		>
+			meshcore-cz/hopback
+		</a>
+		<span class="mx-1 text-neutral-400">·</span>
+		<span>v{APP_VERSION}</span>
+	</footer>
 </main>
 
 {#snippet ExpiredWithoutPacketsPanel()}

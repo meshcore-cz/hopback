@@ -29,6 +29,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/meshcore-cz/hopback/internal/buildinfo"
 	"github.com/meshcore-cz/meshpkt"
 	qrcode "github.com/skip2/go-qrcode"
 	"gopkg.in/yaml.v3"
@@ -124,6 +125,7 @@ type Location struct {
 }
 
 type RuntimeStatus struct {
+	Version         string           `json:"version"`
 	Analyzers       []AnalyzerState  `json:"analyzers"`
 	Endpoints       []EndpointStatus `json:"endpoints"`
 	Agents          []AgentStatus    `json:"agents"`
@@ -167,6 +169,7 @@ type EndpointStatus struct {
 
 type AgentStatus struct {
 	ID          string `json:"id"`
+	Version     string `json:"version,omitempty"`
 	EndpointID  string `json:"endpointId,omitempty"`
 	IPCReady    bool   `json:"ipcReady"`
 	ConnectedAt string `json:"connectedAt"`
@@ -467,6 +470,7 @@ func (c *BrowserClient) subscribed(testID string) bool {
 type AgentClient struct {
 	conn        *websocket.Conn
 	ID          string
+	Version     string
 	EndpointID  string
 	IPCReady    bool
 	ConnectedAt string
@@ -787,7 +791,7 @@ func (rt *Runtime) Status() RuntimeStatus {
 	}
 	agents := make([]AgentStatus, 0, len(rt.agents))
 	for _, a := range rt.agents {
-		agents = append(agents, AgentStatus{ID: a.ID, EndpointID: a.EndpointID, IPCReady: a.IPCReady, ConnectedAt: a.ConnectedAt, LastSeenAt: a.LastSeenAt})
+		agents = append(agents, AgentStatus{ID: a.ID, Version: a.Version, EndpointID: a.EndpointID, IPCReady: a.IPCReady, ConnectedAt: a.ConnectedAt, LastSeenAt: a.LastSeenAt})
 	}
 	eps := make([]EndpointStatus, 0, len(rt.cfg.Endpoints))
 	for _, ep := range rt.cfg.Endpoints {
@@ -822,7 +826,7 @@ func (rt *Runtime) Status() RuntimeStatus {
 	if name := strings.TrimSpace(rt.cfg.Service.Network.Name); name != "" {
 		network = &NetworkInfo{Name: name, URL: strings.TrimSpace(rt.cfg.Service.Network.URL), Flag: strings.TrimSpace(rt.cfg.Service.Network.Flag), Message: rt.cfg.Service.Network.Message}
 	}
-	return RuntimeStatus{Analyzers: analyzers, Endpoints: eps, Agents: agents, Nodes: nodes, Observers: len(rt.observers), ActiveObservers: activeObs, ActiveTests: len(rt.active), Verbose: rt.cfg.Service.Verbose, Network: network}
+	return RuntimeStatus{Version: buildinfo.Version, Analyzers: analyzers, Endpoints: eps, Agents: agents, Nodes: nodes, Observers: len(rt.observers), ActiveObservers: activeObs, ActiveTests: len(rt.active), Verbose: rt.cfg.Service.Verbose, Network: network}
 }
 
 func (rt *Runtime) handleNodes(w http.ResponseWriter, r *http.Request) {
@@ -1696,6 +1700,7 @@ func (rt *Runtime) handleAgentMessage(agent *AgentClient, raw json.RawMessage) {
 	case "hello":
 		var msg struct {
 			ID         string `json:"id"`
+			Version    string `json:"version"`
 			EndpointID string `json:"endpointId"`
 			IPCReady   bool   `json:"ipcReady"`
 		}
@@ -1708,6 +1713,9 @@ func (rt *Runtime) handleAgentMessage(agent *AgentClient, raw json.RawMessage) {
 		}
 		if msg.EndpointID != "" {
 			agent.EndpointID = msg.EndpointID
+		}
+		if msg.Version != "" {
+			agent.Version = msg.Version
 		}
 		agent.IPCReady = msg.IPCReady
 		rt.mu.Unlock()

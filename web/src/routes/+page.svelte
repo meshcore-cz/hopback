@@ -21,6 +21,7 @@
 	import { t, locale } from '$lib/i18n/index.svelte';
 	import LanguageSwitcher from '$lib/i18n/LanguageSwitcher.svelte';
 	import TestHistoryTable from '$lib/TestHistoryTable.svelte';
+	import { APP_VERSION } from '$lib/version';
 
 	interface EndpointOption {
 		id: string;
@@ -640,5 +641,7 @@
 		>
 			meshcore-cz/hopback
 		</a>
+		<span class="mx-1 text-neutral-400">·</span>
+		<span>v{APP_VERSION}</span>
 	</footer>
 </main>

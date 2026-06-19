@@ -186,6 +186,7 @@ export interface PathStatistics {
 }
 
 export interface RuntimeStatus {
+	version: string;
 	analyzers: Array<{
 		url: string;
 		state: 'connecting' | 'open' | 'closed' | 'error';
@@ -207,6 +208,7 @@ export interface RuntimeStatus {
 	}>;
 	agents: Array<{
 		id: string;
+		version?: string;
 		endpointId?: string;
 		ipcReady: boolean;
 		connectedAt: string;

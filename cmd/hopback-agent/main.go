@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/meshcore-cz/hopback/internal/buildinfo"
 )
 
 const (
@@ -347,6 +348,7 @@ func (a *Agent) sendBackendStatus() {
 	_ = a.sendBackend(map[string]any{
 		"type":       "hello",
 		"id":         a.cfg.AgentID,
+		"version":    buildinfo.Version,
 		"endpointId": a.cfg.EndpointID,
 		"ipcReady":   a.isIPCReady(),
 	})
