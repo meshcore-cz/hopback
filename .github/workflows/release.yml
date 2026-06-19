@@ -1,0 +1,126 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build, e.g. v0.9.1'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - name: linux-arm64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            apt: gcc-aarch64-linux-gnu
+            cc: aarch64-linux-gnu-gcc
+          - name: darwin-arm64
+            runner: macos-14
+            goos: darwin
+            goarch: arm64
+          - name: darwin-amd64
+            runner: macos-14
+            goos: darwin
+            goarch: amd64
+            cc: clang -arch x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install cross compiler
+        if: matrix.apt != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt }}
+
+      # Development go.mod points meshcore-go at a local ../meshcore-go checkout.
+      # On CI resolve it from the published module instead.
+      - name: Resolve meshcore-go from upstream
+        run: |
+          go mod edit \
+            -dropreplace=github.com/meshcore-cz/meshcore-go \
+            -droprequire=github.com/meshcore-cz/meshcore-go
+          go get github.com/meshcore-cz/meshcore-go@main
+          go mod tidy
+
+      - name: Build embedded frontend
+        run: |
+          npm ci
+          npm run build:frontend:embed
+
+      - name: Build binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CC: ${{ matrix.cc }}
+        run: |
+          set -euo pipefail
+          RAW_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${RAW_TAG#v}"
+          LDFLAGS="-s -w -X github.com/meshcore-cz/hopback/internal/buildinfo.Version=${VERSION}"
+
+          mkdir -p dist
+          # hopbackd needs cgo for SQLite. The agent needs cgo on macOS
+          # (CoreBluetooth), so build both with cgo for consistent toolchains.
+          CGO_ENABLED=1 go build -ldflags "$LDFLAGS" -o dist/hopbackd ./cmd/hopbackd
+          CGO_ENABLED=1 go build -ldflags "$LDFLAGS" -o dist/hopback-agent ./cmd/hopback-agent
+
+          SUFFIX="${RAW_TAG}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          tar -C dist -czf "hopbackd_${SUFFIX}.tar.gz" hopbackd
+          tar -C dist -czf "hopback-agent_${SUFFIX}.tar.gz" hopback-agent
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.name }}
+          path: '*.tar.gz'
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS

@@ -1,0 +1,41 @@
+# Example Hopback deployment with Docker Compose.
+#
+# Quick start:
+#   cp config.yaml.example config.yaml   # then edit secrets/endpoints
+#   docker compose up -d
+#
+# The backend serves the UI, API, /ws and /agent on port 3000. The agent
+# connects to it over the internal compose network and bridges a MeshCore radio.
+# Pin :latest to a specific version (e.g. :0.9.1) for reproducible deployments.
+
+services:
+  hopbackd:
+    image: ghcr.io/meshcore-cz/hopbackd:latest
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    volumes:
+      # Backend/web config (secrets, endpoints). Required.
+      - ./config.yaml:/app/config.yaml:ro
+      # Persists the SQLite database (config databasePath: data/hopback.sqlite).
+      - hopback-data:/app/data
+
+  hopback-agent:
+    image: ghcr.io/meshcore-cz/hopback-agent:latest
+    restart: unless-stopped
+    depends_on:
+      - hopbackd
+    environment:
+      # Reach the backend over the compose network. /agent is the agent endpoint.
+      HOPBACK_BACKEND_WS: ws://hopbackd:3000/agent
+      # Must match service.agentSecret in config.yaml.
+      HOPBACK_AGENT_SECRET: change-this-secret
+      HOPBACK_ENDPOINT_ID: kololec
+      HOPBACK_AGENT_ID: kololec-agent
+      # Radio backend. Direct companion TCP (e.g. meshcore-proxy) works well in
+      # containers. For an IPC unix socket, bind-mount it and use ipc+unix://.
+      MESHCORE_URI: tcp://10.0.0.30:5000
+      # MESHCORE_DEVICE: default-device-id
+
+volumes:
+  hopback-data:

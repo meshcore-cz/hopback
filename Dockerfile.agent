@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1
+
+# hopback-agent: the lightweight radio bridge. It has no SQLite or frontend, so
+# it builds as a fully static binary (CGO_ENABLED=0) and ships on distroless.
+
+FROM golang:1.25-bookworm AS build
+ARG VERSION=dev
+WORKDIR /src
+COPY . .
+# Resolve meshcore-go from its published module instead of the dev-only
+# ../meshcore-go replace directive in go.mod.
+RUN go mod edit \
+        -dropreplace=github.com/meshcore-cz/meshcore-go \
+        -droprequire=github.com/meshcore-cz/meshcore-go \
+ && go get github.com/meshcore-cz/meshcore-go@main \
+ && go mod tidy
+RUN CGO_ENABLED=0 go build \
+        -ldflags "-s -w -X github.com/meshcore-cz/hopback/internal/buildinfo.Version=${VERSION}" \
+        -o /out/hopback-agent ./cmd/hopback-agent
+
+FROM gcr.io/distroless/static-debian12 AS runtime
+COPY --from=build /out/hopback-agent /usr/local/bin/hopback-agent
+ENTRYPOINT ["hopback-agent"]

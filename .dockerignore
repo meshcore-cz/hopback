@@ -1,0 +1,19 @@
+# Keep the Docker build context small and reproducible. The frontend is built
+# inside the image, and meshcore-go is resolved from its published module
+# instead of the local ../meshcore-go replace, so none of these are needed.
+node_modules
+.git
+.github
+data
+bin
+build
+.svelte-kit
+.output
+hopbackd
+hopback-agent
+*.sqlite
+config.yaml
+.env
+.env.*
+!.env.example
+.DS_Store

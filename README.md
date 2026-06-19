@@ -61,6 +61,67 @@ make start
 
 `make build` writes the static Svelte frontend into `cmd/hopbackd/frontend/`, builds `bin/hopbackd` with those assets embedded, and builds `bin/hopback-agent`. `make start` launches the single Go web process, which serves the UI, `/api/*`, `/ws`, and `/agent`.
 
+## Docker
+
+Prebuilt multi-arch (`amd64`/`arm64`) images are published to GitHub Container Registry on every tagged release:
+
+- `ghcr.io/meshcore-cz/hopbackd` — the web backend with the frontend embedded.
+- `ghcr.io/meshcore-cz/hopback-agent` — the lightweight radio bridge.
+
+Tags follow the release: `latest`, the full version (`0.9.1`), and the minor series (`0.9`). Pin a specific version for reproducible deployments. The `main` branch also publishes a rolling `main` tag.
+
+### Docker Compose (recommended)
+
+The repository ships a ready-to-edit [`docker-compose.yml`](docker-compose.yml) that runs the backend and an agent together:
+
+```sh
+cp config.yaml.example config.yaml   # edit service.agentSecret, endpoints, keys
+docker compose up -d
+```
+
+Open `http://localhost:3000`. The backend reads `config.yaml` mounted read-only at `/app/config.yaml` and stores its SQLite database in the `hopback-data` volume (`databasePath: data/hopback.sqlite` resolves to `/app/data`). The agent reaches the backend over the internal compose network at `ws://hopbackd:3000/agent`; set `HOPBACK_AGENT_SECRET` to match `service.agentSecret` and point `MESHCORE_URI` at your radio.
+
+Update to a newer image with:
+
+```sh
+docker compose pull && docker compose up -d
+```
+
+### Plain Docker
+
+Backend only:
+
+```sh
+docker run -d --name hopbackd \
+  -p 3000:3000 \
+  -v "$PWD/config.yaml:/app/config.yaml:ro" \
+  -v hopback-data:/app/data \
+  ghcr.io/meshcore-cz/hopbackd:latest
+```
+
+Agent only (configuration comes from environment variables; no `.env` file needed):
+
+```sh
+docker run -d --name hopback-agent \
+  -e HOPBACK_BACKEND_WS=ws://hopback-host:3000/agent \
+  -e HOPBACK_AGENT_SECRET=change-this-secret \
+  -e HOPBACK_ENDPOINT_ID=kololec \
+  -e HOPBACK_AGENT_ID=kololec-agent \
+  -e MESHCORE_URI=tcp://10.0.0.30:5000 \
+  ghcr.io/meshcore-cz/hopback-agent:latest
+```
+
+To connect the agent to a host Unix IPC socket instead, bind-mount it and use `MESHCORE_URI=ipc+unix:///path/inside/container.sock`.
+
+### Building images locally
+
+```sh
+docker build -f Dockerfile.hopbackd -t hopbackd:dev .
+docker build -f Dockerfile.agent -t hopback-agent:dev .
+```
+
+The image builds resolve `meshcore-go` from its published module, so the local `../meshcore-go` checkout used for development is not required.
+
 ## Versioning
 
 ```sh
@@ -68,6 +129,19 @@ make release VERSION=v0.9.1
 ```
 
 The release target checks the tree, updates `package.json` to the unprefixed version (`0.9.1`), commits it, tags `v0.9.1`, and pushes the branch and tag. Makefile targets read the package version and stamp it into the Go backend and agent with `-ldflags`.
+
+Pushing a `v*` tag also triggers the `Release Binaries` workflow, which builds `hopbackd` and `hopback-agent` for Linux (`amd64`/`arm64`) and macOS (`amd64`/`arm64`), then attaches the `.tar.gz` archives and `SHA256SUMS` to the GitHub Release. The `Docker Images` workflow publishes the matching GHCR images.
+
+### Prebuilt Binaries
+
+Download the archive for your platform from the [Releases page](https://github.com/meshcore-cz/hopback/releases), verify it, and install:
+
+```sh
+tar -xzf hopbackd_v0.9.1_linux_amd64.tar.gz
+install -m 755 hopbackd /usr/local/bin/hopbackd
+```
+
+`hopbackd` still needs a `config.yaml` in its working directory; the agent reads its `.env` or environment variables.
 
 ### Server Install With Go
 
