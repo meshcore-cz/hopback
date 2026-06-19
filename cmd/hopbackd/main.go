@@ -83,6 +83,19 @@ type Config struct {
 		PrivateKey                string `yaml:"privateKey"`
 		PublicKey                 string `yaml:"publicKey"`
 		AgentSecret               string `yaml:"agentSecret"`
+		// Network scopes this instance to one MeshCore network. Surfaced on the
+		// homepage so users know which network these diagnostics cover; each
+		// Hopback deployment serves a single network.
+		Network struct {
+			Name string `yaml:"name"`
+			URL  string `yaml:"url"`
+			// Flag is an optional emoji (e.g. "🇨🇿") shown next to the title to make
+			// the instance's region obvious at a glance.
+			Flag string `yaml:"flag"`
+			// Message overrides the homepage scope notice with a locale-keyed string
+			// (e.g. message.en / message.cs). Falls back to a templated default.
+			Message map[string]string `yaml:"message"`
+		} `yaml:"network"`
 	} `yaml:"service"`
 	CoreScope struct {
 		URLs            []string `yaml:"urls"`
@@ -119,6 +132,16 @@ type RuntimeStatus struct {
 	ActiveObservers int              `json:"activeObservers"`
 	ActiveTests     int              `json:"activeTests"`
 	Verbose         bool             `json:"verbose"`
+	Network         *NetworkInfo     `json:"network,omitempty"`
+}
+
+// NetworkInfo names the single MeshCore network this instance is scoped to.
+type NetworkInfo struct {
+	Name string `json:"name"`
+	URL  string `json:"url,omitempty"`
+	Flag string `json:"flag,omitempty"`
+	// Message is an optional locale-keyed override for the homepage scope notice.
+	Message map[string]string `json:"message,omitempty"`
 }
 
 type AnalyzerState struct {
@@ -192,6 +215,9 @@ type Test struct {
 	DeliveryPaths          map[string][]DeliveryPathOption `json:"deliveryPaths,omitempty"`
 	PropagationMap         *PropagationMapData             `json:"propagationMap,omitempty"`
 	PathStatistics         *PathStatistics                 `json:"pathStatistics,omitempty"`
+	// hopCandidates holds the rival nodes for each colliding short path hash
+	// (keyed by lowercased hex). Transient: rebuilt by decorate, never persisted.
+	hopCandidates map[string][]NodeRef `json:"-"`
 }
 
 type Observation struct {
@@ -242,14 +268,24 @@ type DeliveryPathRow struct {
 	Lat       *float64 `json:"lat,omitempty"`
 	Lon       *float64 `json:"lon,omitempty"`
 	HasCoords bool     `json:"hasCoords,omitempty"`
-	Tone      string   `json:"tone"`
+	// Hex is the raw per-hop path hash as seen on the mesh; its width (1b/2b/3b…)
+	// reflects how the packet's routing encoded the path.
+	Hex string `json:"hex,omitempty"`
+	// Conflict is set when the hop's short path hash collided with several known
+	// nodes; Alternatives lists the runners-up (the chosen node is this row).
+	Conflict     bool      `json:"conflict,omitempty"`
+	Alternatives []NodeRef `json:"alternatives,omitempty"`
+	Tone         string    `json:"tone"`
 }
 
 type DeliveryPathOption struct {
 	Key           string            `json:"key"`
-	Direction     string            `json:"direction"`
-	Kind          string            `json:"kind"`
-	HopCount      int               `json:"hopCount"`
+	Direction string `json:"direction"`
+	Kind      string `json:"kind"`
+	HopCount  int    `json:"hopCount"`
+	// HashWidth is the per-hop path-hash size in bytes (1/2/3) the packet's routing
+	// used to address relays. 0 when there are no hops (a direct packet).
+	HashWidth     int               `json:"hashWidth,omitempty"`
 	ObservationID int64             `json:"observationId"`
 	PacketHash    string            `json:"packetHash"`
 	CreatedAt     string            `json:"createdAt"`
@@ -766,7 +802,11 @@ func (rt *Runtime) Status() RuntimeStatus {
 		}
 	}
 	nodes, _ := rt.store.CountNodes()
-	return RuntimeStatus{Analyzers: analyzers, Endpoints: eps, Agents: agents, Nodes: nodes, Observers: len(rt.observers), ActiveObservers: activeObs, ActiveTests: len(rt.active), Verbose: rt.cfg.Service.Verbose}
+	var network *NetworkInfo
+	if name := strings.TrimSpace(rt.cfg.Service.Network.Name); name != "" {
+		network = &NetworkInfo{Name: name, URL: strings.TrimSpace(rt.cfg.Service.Network.URL), Flag: strings.TrimSpace(rt.cfg.Service.Network.Flag), Message: rt.cfg.Service.Network.Message}
+	}
+	return RuntimeStatus{Analyzers: analyzers, Endpoints: eps, Agents: agents, Nodes: nodes, Observers: len(rt.observers), ActiveObservers: activeObs, ActiveTests: len(rt.active), Verbose: rt.cfg.Service.Verbose, Network: network}
 }
 
 func (rt *Runtime) handleNodes(w http.ResponseWriter, r *http.Request) {
@@ -976,26 +1016,26 @@ func (rt *Runtime) decorate(t *Test) *Test {
 }
 
 func (rt *Runtime) resolveObservationNodes(t *Test) {
+	t.hopCandidates = map[string][]NodeRef{}
 	keys := []string{t.UserPublicKey, t.EndpointPublicKey}
-	prefixSet := map[string]bool{}
+	hashSet := map[string]bool{}
 	for _, obs := range t.Observations {
 		if obs.ObserverID != nil {
 			keys = append(keys, *obs.ObserverID)
 		}
-		keys = append(keys, obs.Path...)
-		// The full pubkeys CoreScope resolved are the best lookup keys for hops.
+		// The full pubkeys CoreScope resolved are exact lookup keys for hops.
 		for _, pk := range obs.PathKeys {
 			if pk != nil {
 				keys = append(keys, *pk)
 			}
 		}
-		// Agent hops carry only a short path-hash prefix with no full-pubkey hint;
-		// collect them for best-candidate prefix matching against the node table.
+		// Hops without a full-pubkey hint carry only a short path hash, which
+		// collides across many nodes; gather them for candidate resolution.
 		for j, hop := range obs.Path {
 			hasHint := j < len(obs.PathKeys) && obs.PathKeys[j] != nil && strings.TrimSpace(*obs.PathKeys[j]) != ""
 			h := strings.ToLower(strings.TrimSpace(hop))
-			if !hasHint && len(h) >= 4 {
-				prefixSet[h] = true
+			if !hasHint && h != "" {
+				hashSet[h] = true
 			}
 		}
 	}
@@ -1003,11 +1043,17 @@ func (rt *Runtime) resolveObservationNodes(t *Test) {
 	for key, node := range nodes {
 		t.Nodes[key] = node
 	}
-	prefixList := make([]string, 0, len(prefixSet))
-	for p := range prefixSet {
-		prefixList = append(prefixList, p)
+	hashList := make([]string, 0, len(hashSet))
+	for h := range hashSet {
+		hashList = append(hashList, h)
 	}
-	prefixNodes, _ := rt.store.LookupNodesByPrefix(prefixList)
+	candidates, _ := rt.store.LookupNodeCandidates(hashList)
+	// Re-rank collisions by geography: a relay within map range of the endpoint
+	// is far more plausible than one resolved to bogus, globe-spanning coords.
+	endpoint := rt.endpointCoords(t)
+	for h, list := range candidates {
+		candidates[h] = rankCandidates(list, endpoint)
+	}
 	for i := range t.Observations {
 		obs := &t.Observations[i]
 		if obs.ObserverID != nil {
@@ -1033,16 +1079,19 @@ func (rt *Runtime) resolveObservationNodes(t *Test) {
 				obs.PathKeys[j] = &key
 				continue
 			}
-			// 2. Exact short-hash / pubkey match.
-			if key := nodeKey(hop, nodes); key != "" {
-				obs.PathKeys[j] = &key
+			// 2. Resolve the short path hash to its most-probable node, keeping the
+			// rivals so the UI can flag the collision.
+			h := strings.ToLower(strings.TrimSpace(hop))
+			cands := candidates[h]
+			if len(cands) == 0 {
 				continue
 			}
-			// 3. Best-candidate prefix match for agent-observed path hashes.
-			if node, ok := prefixNodes[strings.ToLower(strings.TrimSpace(hop))]; ok && node.PublicKey != "" {
-				key := strings.ToLower(node.PublicKey)
-				t.Nodes[key] = node
-				obs.PathKeys[j] = &key
+			best := cands[0]
+			key := strings.ToLower(firstNonEmpty(best.PublicKey, h))
+			t.Nodes[key] = best
+			obs.PathKeys[j] = &key
+			if len(cands) > 1 {
+				t.hopCandidates[h] = cands
 			}
 		}
 		if d := rt.observationDistanceKm(t, *obs); d != nil {
@@ -1051,14 +1100,54 @@ func (rt *Runtime) resolveObservationNodes(t *Test) {
 	}
 }
 
-func (rt *Runtime) observationDistanceKm(t *Test, obs Observation) *float64 {
-	points := rt.pathCoordinatePoints(t, obs)
-	if len(points) < 2 {
-		return nil
+// rankCandidates orders collision candidates for a path hash best-first: nodes
+// within map range of the endpoint are the most plausible relays, then nodes of
+// unknown location, then implausibly distant ones. Within a tier the incoming
+// (recency) order is preserved.
+func rankCandidates(cands []NodeRef, endpoint *[2]float64) []NodeRef {
+	if len(cands) <= 1 {
+		return cands
 	}
+	out := make([]NodeRef, len(cands))
+	copy(out, cands)
+	tier := func(n NodeRef) int {
+		if !hasCoords(n.Lat, n.Lon) {
+			return 1
+		}
+		if endpoint == nil || haversineKm(endpoint[0], endpoint[1], *n.Lat, *n.Lon) <= maxMapDistanceKm {
+			return 0
+		}
+		return 2
+	}
+	sort.SliceStable(out, func(i, j int) bool { return tier(out[i]) < tier(out[j]) })
+	return out
+}
+
+// observationDistanceKm sums the geographic length of the delivery route. Hops
+// without coordinates — or resolved to implausibly distant ones (a short-hash
+// collision pointing across the globe) — break the chain: the lines into and
+// out of such a hop are not counted, rather than bridged, so a single bogus
+// coordinate can't inflate the distance to thousands of kilometres.
+func (rt *Runtime) observationDistanceKm(t *Test, obs Observation) *float64 {
+	endpoint := rt.endpointCoords(t)
 	total := 0.0
-	for i := 1; i < len(points); i++ {
-		total += haversineKm(points[i-1][0], points[i-1][1], points[i][0], points[i][1])
+	counted := false
+	var prev *[2]float64
+	for _, row := range rt.deliveryRows(t, obs) {
+		if !hasCoords(row.Lat, row.Lon) ||
+			(endpoint != nil && haversineKm(endpoint[0], endpoint[1], *row.Lat, *row.Lon) > maxMapDistanceKm) {
+			prev = nil
+			continue
+		}
+		cur := [2]float64{*row.Lat, *row.Lon}
+		if prev != nil {
+			total += haversineKm(prev[0], prev[1], cur[0], cur[1])
+			counted = true
+		}
+		prev = &cur
+	}
+	if !counted {
+		return nil
 	}
 	return &total
 }
@@ -1078,6 +1167,18 @@ func routeSignature(rows []DeliveryPathRow) string {
 		parts = append(parts, firstNonEmpty(strVal(r.PublicKey), strVal(r.ShortHash), r.Short, r.Name))
 	}
 	return strings.Join(parts, ">")
+}
+
+// pathHashWidth returns the per-hop path-hash size in bytes, inferred from the
+// hex width of the first relay hash (each hop is a fixed-size hash). 0 if empty.
+func pathHashWidth(path []string) int {
+	for _, h := range path {
+		h = strings.TrimSpace(h)
+		if h != "" {
+			return len(h) / 2
+		}
+	}
+	return 0
 }
 
 func (rt *Runtime) deliveryPaths(t *Test) map[string][]DeliveryPathOption {
@@ -1114,6 +1215,7 @@ func (rt *Runtime) deliveryPaths(t *Test) map[string][]DeliveryPathOption {
 				Direction:     obs.Direction,
 				Kind:          packetKind(obs),
 				HopCount:      obs.HopCount,
+				HashWidth:     pathHashWidth(obs.Path),
 				ObservationID: obs.ID,
 				PacketHash:    obs.PacketHash,
 				CreatedAt:     obs.CreatedAt,
@@ -1144,7 +1246,7 @@ func (rt *Runtime) deliveryRows(t *Test, obs Observation) []DeliveryPathRow {
 		short := firstNonEmpty(node.ShortHash, hop)
 		pub := ptrIf(node.PublicKey)
 		shortPtr := ptrIf(short)
-		rows = append(rows, DeliveryPathRow{
+		row := DeliveryPathRow{
 			Key:       fmt.Sprintf("%s:hop:%d:%s", obs.Direction, i, key),
 			Name:      name,
 			Meta:      "Hop " + strconv.Itoa(i+1),
@@ -1154,8 +1256,20 @@ func (rt *Runtime) deliveryRows(t *Test, obs Observation) []DeliveryPathRow {
 			Lat:       node.Lat,
 			Lon:       node.Lon,
 			HasCoords: hasCoords(node.Lat, node.Lon),
+			Hex:       strings.ToUpper(hop),
 			Tone:      "hop",
-		})
+		}
+		// Flag a collision when the short path hash matched several nodes; the
+		// chosen one is this row, so the rest are the tooltip alternatives.
+		if alts := t.hopCandidates[strings.ToLower(strings.TrimSpace(hop))]; len(alts) > 1 {
+			row.Conflict = true
+			others := alts[1:]
+			if len(others) > 8 {
+				others = others[:8]
+			}
+			row.Alternatives = others
+		}
+		rows = append(rows, row)
 	}
 	rows = append(rows, rt.edgeRow(t, obs.Direction, "end"))
 	return rows
@@ -1327,16 +1441,6 @@ func pathStatistics(t *Test) *PathStatistics {
 	return &PathStatistics{TotalPaths: len(uniqueAll), OutboundPaths: len(uniqueOut), ReturnPaths: len(uniqueReturn), LongestDistanceKm: longestDistance, LongestDistanceLabel: longestLabel, LongestHopCount: longestHop, ShortestHopCount: shortestHop, AverageDistanceKm: avg}
 }
 
-func (rt *Runtime) pathCoordinatePoints(t *Test, obs Observation) [][2]float64 {
-	rows := rt.deliveryRows(t, obs)
-	out := make([][2]float64, 0, len(rows))
-	for _, row := range rows {
-		if hasCoords(row.Lat, row.Lon) {
-			out = append(out, [2]float64{*row.Lat, *row.Lon})
-		}
-	}
-	return out
-}
 
 func nodeKey(value string, nodes map[string]NodeRef) string {
 	value = strings.ToLower(strings.TrimSpace(value))
@@ -3013,34 +3117,55 @@ func (s *Store) LookupNodes(keys []string) (map[string]NodeRef, error) {
 	return out, rows.Err()
 }
 
-// LookupNodesByPrefix resolves short path-hash prefixes (e.g. agent-observed
-// "a1b2") to a best-candidate node whose public key starts with that prefix.
-// Among collisions it prefers a node with coordinates, then the most recently
-// seen one. Returns a map keyed by the lowercased prefix.
-func (s *Store) LookupNodesByPrefix(prefixes []string) (map[string]NodeRef, error) {
-	out := map[string]NodeRef{}
+// LookupNodeCandidates returns, for each given path hash, every node it could
+// resolve to. A 1-byte hash (2 hex chars) collides across many nodes, so the
+// short_hash match returns all of them; a longer hash carries enough entropy to
+// match a public-key prefix instead. Candidates come back best-first (nodes with
+// coordinates, then most recently seen) and capped, keyed by the lowercased hash.
+func (s *Store) LookupNodeCandidates(hashes []string) (map[string][]NodeRef, error) {
+	out := map[string][]NodeRef{}
 	seen := map[string]bool{}
-	for _, p := range prefixes {
-		p = strings.ToLower(strings.TrimSpace(p))
-		// Require at least 2 bytes; a 1-byte prefix matches too many nodes to guess.
-		if len(p) < 4 || seen[p] {
+	for _, h := range hashes {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" || seen[h] {
 			continue
 		}
-		seen[p] = true
-		row := s.db.QueryRow(`select public_key,name,short_hash,lat,lon from nodes where lower(public_key) like ? order by (lat is not null) desc, updated_at desc limit 1`, p+"%")
-		var pub, name, short string
-		var lat, lon sql.NullFloat64
-		if err := row.Scan(&pub, &name, &short, &lat, &lon); err != nil {
-			continue
+		seen[h] = true
+		var rows *sql.Rows
+		var err error
+		if len(h) <= 2 {
+			rows, err = s.db.Query(`select public_key,name,short_hash,lat,lon from nodes where lower(short_hash)=? order by (lat is not null) desc, updated_at desc limit 25`, h)
+		} else {
+			rows, err = s.db.Query(`select public_key,name,short_hash,lat,lon from nodes where lower(public_key) like ? order by (lat is not null) desc, updated_at desc limit 25`, h+"%")
 		}
-		node := NodeRef{Name: name, ShortHash: short, PublicKey: pub}
-		if lat.Valid {
-			node.Lat = &lat.Float64
+		if err != nil {
+			return nil, err
 		}
-		if lon.Valid {
-			node.Lon = &lon.Float64
+		var list []NodeRef
+		for rows.Next() {
+			var pub, name, short string
+			var lat, lon sql.NullFloat64
+			if err := rows.Scan(&pub, &name, &short, &lat, &lon); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			node := NodeRef{Name: name, ShortHash: short, PublicKey: pub}
+			if lat.Valid {
+				node.Lat = &lat.Float64
+			}
+			if lon.Valid {
+				node.Lon = &lon.Float64
+			}
+			list = append(list, node)
 		}
-		out[p] = node
+		closeErr := rows.Err()
+		rows.Close()
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		if len(list) > 0 {
+			out[h] = list
+		}
 	}
 	return out, nil
 }

@@ -51,6 +51,12 @@ export interface DeliveryPathRow {
 	lat?: number | null;
 	lon?: number | null;
 	hasCoords?: boolean;
+	/** Raw per-hop path hash as seen on the mesh (width reflects routing: 1b/2b/3b…). */
+	hex?: string;
+	/** Set when this hop's short path hash collided with several known nodes. */
+	conflict?: boolean;
+	/** Runner-up nodes for a conflicted hop (the chosen node is this row). */
+	alternatives?: NodeRef[];
 	tone: 'edge' | 'hop';
 }
 
@@ -59,6 +65,8 @@ export interface DeliveryPathOption {
 	direction: Direction;
 	kind: PacketKind;
 	hopCount: number;
+	/** Per-hop path-hash size in bytes (1/2/3) the routing used; 0/absent if direct. */
+	hashWidth?: number;
 	observationId: number;
 	packetHash: string;
 	createdAt: string;
@@ -202,6 +210,15 @@ export interface RuntimeStatus {
 	activeObservers: number;
 	activeTests: number;
 	verbose: boolean;
+	/** The single MeshCore network this instance is scoped to, if configured. */
+	network?: {
+		name: string;
+		url?: string;
+		/** Optional emoji flag shown next to the title. */
+		flag?: string;
+		/** Optional locale-keyed override for the homepage scope notice. */
+		message?: Record<string, string>;
+	};
 }
 
 export interface BrowserEvent {

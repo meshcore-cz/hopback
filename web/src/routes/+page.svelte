@@ -18,7 +18,7 @@
 	} from '@lucide/svelte';
 	import type { DiagnosticTest, EndpointConfig, NodeRecord, RuntimeStatus } from '$lib/types';
 	import { apiFetch } from '$lib/client/api';
-	import { t } from '$lib/i18n/index.svelte';
+	import { t, locale } from '$lib/i18n/index.svelte';
 	import LanguageSwitcher from '$lib/i18n/LanguageSwitcher.svelte';
 	import TestHistoryTable from '$lib/TestHistoryTable.svelte';
 
@@ -302,7 +302,12 @@
 				<p class="text-sm font-semibold uppercase tracking-wide text-teal-700">
 					{t('header.tagline')}
 				</p>
-				<h1 class="text-3xl font-semibold tracking-normal text-neutral-950">Hopback</h1>
+				<h1 class="flex items-center gap-2 text-3xl font-semibold tracking-normal text-neutral-950">
+					<span>Hopback</span>
+					{#if status?.network?.flag}
+						<span title={status.network.name}>{status.network.flag}</span>
+					{/if}
+				</h1>
 			</div>
 		</div>
 
@@ -334,6 +339,28 @@
 			</div>
 		</div>
 	</header>
+
+	{#if status?.network?.name}
+		<div
+			class="flex flex-wrap items-center gap-2 rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-900"
+		>
+			<MapPin size={16} class="shrink-0 text-teal-700" />
+			<span
+				>{status.network.message?.[locale()] ??
+					t('network.scope', { name: status.network.name })}</span
+			>
+			{#if status.network.url}
+				<a
+					class="font-semibold underline underline-offset-2 hover:text-teal-700"
+					href={status.network.url}
+					target="_blank"
+					rel="noreferrer"
+				>
+					{t('network.scopeLink')}
+				</a>
+			{/if}
+		</div>
+	{/if}
 
 	<form
 		class="rounded-md border border-neutral-300 bg-white p-4 shadow-sm sm:p-5"

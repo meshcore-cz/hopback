@@ -1,5 +1,17 @@
 service:
   name: Hopback
+  # The single MeshCore network this instance serves. Shown on the homepage so
+  # users know these diagnostics only cover that network. Omit name to hide it.
+  # `message` optionally overrides the notice per locale; otherwise a templated
+  # default using `name` is shown.
+  network:
+    name: Czech Republic
+    url: https://meshcore.cz
+    # Optional emoji flag shown next to the "Hopback" title.
+    flag: 🇨🇿
+    message:
+      en: This instance only covers the MeshCore network in the Czech Republic.
+      cs: Tato instance pokrývá pouze síť MeshCore v České Republice.
   databasePath: data/hopback.sqlite
   verbose: false
   autoReply: true

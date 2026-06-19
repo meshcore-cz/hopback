@@ -6,6 +6,7 @@
 	import { fade } from 'svelte/transition';
 	import {
 		AlertCircle,
+		AlertTriangle,
 		ArrowLeft,
 		CheckCircle2,
 		Circle,
@@ -15,6 +16,7 @@
 		Copy,
 		Eye,
 		GitBranch,
+		Hash,
 		Timer,
 		Users,
 		Waypoints,
@@ -33,6 +35,7 @@
 	import type {
 		BrowserEvent,
 		DeliveryPathOption,
+		DeliveryPathRow,
 		DiagnosticTest,
 		PacketKind,
 		PacketObservation,
@@ -93,6 +96,32 @@
 	let statusPoller: ReturnType<typeof setInterval> | null = null;
 	let testPoller: ReturnType<typeof setInterval> | null = null;
 	let selectedKinds = $state<string[]>([]);
+	// Packet-observation path display: node names vs. raw hex path hashes. The
+	// header button sets the default for every row; per-row buttons override it
+	// (keyed by observation id) so a single path can be flipped on its own.
+	let pathHex = $state(false);
+	let rowHexOverride = $state<Record<number, boolean>>({});
+
+	function rowHex(id: number) {
+		return rowHexOverride[id] ?? pathHex;
+	}
+
+	function toggleRowHex(id: number) {
+		rowHexOverride = { ...rowHexOverride, [id]: !rowHex(id) };
+	}
+
+	// Flipping the global default resets per-row overrides so it acts as a master.
+	function toggleAllHex() {
+		pathHex = !pathHex;
+		rowHexOverride = {};
+	}
+
+	// Per-delivery-path hex toggle, keyed by the option's key.
+	let deliveryHex = $state<Record<string, boolean>>({});
+
+	function toggleDeliveryHex(key: string) {
+		deliveryHex = { ...deliveryHex, [key]: !deliveryHex[key] };
+	}
 	// Map legend chips double as filters: kinds listed here are hidden on the map.
 	let hiddenMapLinks = $state<PacketKind[]>([]);
 	let hiddenMapPoints = $state<string[]>([]);
@@ -438,15 +467,15 @@
 		return uniqueObserverKeys(items).length;
 	}
 
-	// "observed / active (coverage%)" — how many of the currently-live network
-	// observers picked up this packet. Falls back to the bare count when the active
-	// total isn't known yet.
+	// "observed / active" — how many of the currently-live network observers
+	// picked up this packet. Falls back to the bare count when the active total
+	// isn't known yet.
 	function observerCoverage(items: PacketObservation[]) {
 		const observed = uniqueObserverCount(items);
 		const active = runtimeStatus?.activeObservers ?? 0;
 		const total = Math.max(active, observed);
 		if (!total) return String(observed);
-		return `${observed}/${total} (${Math.round((observed / total) * 100)}%)`;
+		return `${observed}/${total}`;
 	}
 
 	function uniquePathCount(items: PacketObservation[]) {
@@ -938,18 +967,99 @@
 		return key ? (test?.nodes?.[key] ?? null) : null;
 	}
 
+	// Mirrors the server's map radius: a hop resolved beyond this from the endpoint
+	// is treated as a bogus path-hash collision, not a real relay.
+	const MAX_MAP_DISTANCE_KM = 2000;
+
+	function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+		const earthKm = 6371.0088;
+		const toRad = (v: number) => (v * Math.PI) / 180;
+		const dLat = toRad(lat2 - lat1);
+		const dLon = toRad(lon2 - lon1);
+		const a =
+			Math.sin(dLat / 2) ** 2 +
+			Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+		return earthKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+	}
+
+	// Whether a coordinate sits implausibly far from the endpoint (out of map range).
+	function coordTooFar(lat?: number | null, lon?: number | null) {
+		if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+		const ep = endpointCoords();
+		if (!ep) return false;
+		return haversineKm(ep[0], ep[1], lat as number, lon as number) > MAX_MAP_DISTANCE_KM;
+	}
+
 	function compactPath(observation: PacketObservation) {
 		return observation.path.map((hash, index) => {
 			const ref = nodeFor(observation.pathKeys[index]);
+			const outOfRange = coordTooFar(ref?.lat, ref?.lon);
 			return {
 				name: ref?.name || hash,
+				hex: String(hash).toUpperCase(),
 				publicKey: ref?.publicKey ?? null,
 				shortHash: ref?.shortHash || hash,
 				lat: ref?.lat,
 				lon: ref?.lon,
-				hasCoords: Number.isFinite(ref?.lat) && Number.isFinite(ref?.lon)
+				// A bogus far coordinate is no better than none for the map/distance.
+				hasCoords: Number.isFinite(ref?.lat) && Number.isFinite(ref?.lon) && !outOfRange,
+				outOfRange
 			};
 		});
+	}
+
+	type CompactHop = ReturnType<typeof compactPath>[number];
+
+	// Path-chip styling: out-of-range hops get a distinct (rose) background, hops
+	// with no usable coordinates stay amber, located hops are neutral.
+	function hopChipClass(hop: CompactHop, interactive: boolean) {
+		if (hop.outOfRange)
+			return interactive
+				? 'bg-rose-100 text-rose-700 hover:bg-rose-200'
+				: 'bg-rose-100 text-rose-700';
+		if (!hop.hasCoords)
+			return interactive
+				? 'bg-orange-100 text-orange-700 hover:bg-orange-200'
+				: 'bg-orange-100 text-orange-700';
+		return interactive
+			? 'bg-neutral-100 text-neutral-600 hover:bg-teal-100 hover:text-teal-800'
+			: 'bg-neutral-100 text-neutral-600';
+	}
+
+	function hopChipTitle(hop: CompactHop) {
+		return hop.outOfRange ? t('obs.path.outOfRange') : undefined;
+	}
+
+	// Delivery paths follow the app's directional convention: outbound (to the
+	// endpoint) is teal, return (from the endpoint) is orange — matching the route
+	// cards and map links. `line` feeds the CSS connector gradient via --delivery-line.
+	function deliveryAccent(direction: 'outbound' | 'return') {
+		return direction === 'outbound'
+			? {
+					rowHover: 'hover:bg-teal-50',
+					edgeBadge: 'bg-teal-100 text-teal-900 group-hover:bg-teal-200',
+					hopBadge:
+						'bg-neutral-100 text-neutral-700 group-hover:bg-teal-100 group-hover:text-teal-900',
+					link: 'text-neutral-300 group-hover:text-teal-700',
+					line: 'rgba(20, 184, 166, 0.36)'
+				}
+			: {
+					rowHover: 'hover:bg-orange-50',
+					edgeBadge: 'bg-orange-100 text-orange-900 group-hover:bg-orange-200',
+					hopBadge:
+						'bg-neutral-100 text-neutral-700 group-hover:bg-orange-100 group-hover:text-orange-900',
+					link: 'text-neutral-300 group-hover:text-orange-700',
+					line: 'rgba(234, 88, 12, 0.36)'
+				};
+	}
+
+	// Tooltip text for a conflicted delivery hop: the chosen node plus the rivals.
+	function conflictTitle(row: DeliveryPathRow) {
+		const names = (row.alternatives ?? []).map(
+			(node) => node.name || node.shortHash || t('common.na')
+		);
+		const header = t('delivery.conflict', { n: names.length + 1 });
+		return names.length ? `${header}\n${t('delivery.conflictOthers')} ${names.join(', ')}` : header;
 	}
 
 	function isEndpointObservation(observation: PacketObservation, current: DiagnosticTest) {
@@ -1210,14 +1320,25 @@
 								<Clock size={18} class="text-amber-700" />
 								<h2 class="text-lg font-semibold text-neutral-950">{t('obs.title')}</h2>
 							</div>
-							<p class="text-sm text-neutral-500">
-								{t('obs.summary', {
-									shown: filteredObservations.length,
-									total: test.observations.length,
-									observers: uniqueObserverCount(filteredObservations),
-									paths: uniquePathCount(filteredObservations)
-								})}
-							</p>
+							<div class="flex items-center gap-3">
+								<p class="text-sm text-neutral-500">
+									{t('obs.summary', {
+										shown: filteredObservations.length,
+										total: test.observations.length,
+										observers: uniqueObserverCount(filteredObservations),
+										paths: uniquePathCount(filteredObservations)
+									})}
+								</p>
+								<button
+									type="button"
+									onclick={toggleAllHex}
+									class={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition ${pathHex ? 'border-teal-300 bg-teal-50 text-teal-800' : 'border-neutral-300 text-neutral-600 hover:bg-neutral-100'}`}
+									title={t('obs.path.toggle')}
+								>
+									<Hash size={13} />
+									<span>{pathHex ? t('obs.path.names') : t('obs.path.hex')}</span>
+								</button>
+							</div>
 						</div>
 						<div class="mb-3 flex flex-wrap gap-2 text-xs">
 							<button
@@ -1253,10 +1374,11 @@
 									{#each [...filteredObservations] as observation (observation.id)}
 										{@const firstSeen = firstObservationTime(test.observations)}
 										{@const endpointObservation = isEndpointObservation(observation, test)}
+										{@const rowIsHex = rowHex(observation.id)}
 										<tr
 											class={endpointObservation
-												? 'bg-teal-50/75 cursor-pointer text-neutral-950'
-												: 'cursor-pointer text-neutral-700 hover:bg-neutral-50'}
+												? 'group bg-teal-50/75 cursor-pointer text-neutral-950'
+												: 'group cursor-pointer text-neutral-700 hover:bg-neutral-50'}
 											onclick={(event) => {
 												event.preventDefault();
 												openObservationOnAnalyzer(observation);
@@ -1287,7 +1409,23 @@
 											</td>
 											<td class="px-2 py-2">{observation.hopCount}</td>
 											<td class="px-2 py-2 font-medium text-neutral-600">
-												{formatDistance(observation.distanceKm)}
+												<div class="flex flex-col items-start gap-1">
+													<span>{formatDistance(observation.distanceKm)}</span>
+													{#if observation.path.length}
+														<button
+															type="button"
+															title={t('obs.path.toggle')}
+															aria-pressed={rowIsHex}
+															class={`size-5 place-items-center rounded border transition focus:grid ${rowIsHex ? 'grid border-teal-300 bg-teal-50 text-teal-700' : 'hidden border-neutral-200 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 group-hover:grid'}`}
+															onclick={(event) => {
+																event.stopPropagation();
+																toggleRowHex(observation.id);
+															}}
+														>
+															<Hash size={12} />
+														</button>
+													{/if}
+												</div>
 											</td>
 											<td class="max-w-64 overflow-x-auto px-2 py-2 sm:max-w-80">
 												<div class="flex flex-wrap items-center gap-1">
@@ -1298,7 +1436,8 @@
 														{#if hop.publicKey}
 															<button
 																type="button"
-																class={`mono rounded px-1.5 py-0.5 text-[10px] transition-colors ${hop.hasCoords ? 'bg-neutral-100 text-neutral-600 hover:bg-teal-100 hover:text-teal-800' : 'bg-orange-100 text-orange-700 hover:bg-orange-200'}`}
+																title={hopChipTitle(hop)}
+																class={`mono rounded px-1.5 py-0.5 text-[10px] transition-colors ${hopChipClass(hop, true)}`}
 																onclick={(event) => {
 																	event.stopPropagation();
 																	if (hop.publicKey)
@@ -1307,12 +1446,13 @@
 																			'_blank',
 																			'noreferrer'
 																		);
-																}}>{hop.name}</button
+																}}>{rowIsHex ? hop.hex : hop.name}</button
 															>
 														{:else}
 															<span
-																class={`mono rounded px-1.5 py-0.5 text-[10px] ${hop.hasCoords ? 'bg-neutral-100 text-neutral-600' : 'bg-orange-100 text-orange-700'}`}
-																>{hop.name}</span
+																title={hopChipTitle(hop)}
+																class={`mono rounded px-1.5 py-0.5 text-[10px] ${hopChipClass(hop, false)}`}
+																>{rowIsHex ? hop.hex : hop.name}</span
 															>
 														{/if}
 													{/each}
@@ -1561,6 +1701,7 @@
 	paths: DeliveryPathOption[],
 	current: DiagnosticTest
 )}
+	{@const accent = deliveryAccent(direction)}
 	<div>
 		<p class="mb-2 text-sm font-semibold text-neutral-900">{title}</p>
 		{#if paths.length}
@@ -1569,18 +1710,44 @@
 					{@const badgeLen = deliveryBadgeLen(option.rows)}
 					<div class="rounded-md border border-neutral-200 p-2.5">
 						<div class="mb-2 flex items-center justify-between gap-2">
-							<span class="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-								{kindLabel(option.kind)}
-							</span>
-							<span class="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">
-								{hopLabel(option.hopCount)}
-							</span>
+							<button
+								type="button"
+								class="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-neutral-500 transition hover:text-teal-700"
+								onclick={() =>
+									window.open(analyzerPacketUrl(option.packetHash), '_blank', 'noreferrer')}
+								title={t('route.openMessage')}
+							>
+								<span>{kindLabel(option.kind)}</span>
+								<ExternalLink size={11} strokeWidth={2} />
+							</button>
+							<div class="flex items-center gap-1.5">
+								<span class="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">
+									{option.hopCount === 0 ? t('route.kind.direct') : hopLabel(option.hopCount)}
+								</span>
+								{#if option.hashWidth}
+									<span
+										class="rounded bg-neutral-100 px-2 py-0.5 text-xs font-medium text-neutral-500"
+										title={t('delivery.hashWidth')}
+									>
+										{option.hashWidth}b
+									</span>
+									<button
+										type="button"
+										title={t('obs.path.toggle')}
+										aria-pressed={deliveryHex[option.key] ?? false}
+										class={`grid size-[22px] place-items-center rounded border transition ${deliveryHex[option.key] ? 'border-teal-300 bg-teal-50 text-teal-700' : 'border-neutral-200 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700'}`}
+										onclick={() => toggleDeliveryHex(option.key)}
+									>
+										<Hash size={12} />
+									</button>
+								{/if}
+							</div>
 						</div>
 						<div class="grid gap-3">
 							{#each option.rows as row, index (row.key)}
 								<button
-									class={`delivery-row group relative flex items-start gap-3 rounded-md text-left transition ${row.publicKey ? 'hover:bg-teal-50' : 'cursor-default'}`}
-									style={`--row-index: ${index}`}
+									class={`delivery-row group relative flex items-start gap-3 rounded-md text-left transition ${row.publicKey ? accent.rowHover : 'cursor-default'}`}
+									style={`--row-index: ${index}; --delivery-line: ${accent.line}`}
 									type="button"
 									disabled={!row.publicKey}
 									onclick={() => {
@@ -1590,24 +1757,34 @@
 									title={row.publicKey ? t('route.openNode') : undefined}
 								>
 									<span
-										class={`z-10 grid size-10 shrink-0 place-items-center rounded-full text-sm font-semibold tracking-tight tabular-nums transition ${row.tone === 'edge' ? 'bg-teal-100 text-teal-900 group-hover:bg-teal-200' : 'bg-neutral-100 text-neutral-700 group-hover:bg-teal-100 group-hover:text-teal-900'}`}
+										class={`z-10 grid size-10 shrink-0 place-items-center rounded-full text-sm font-semibold tracking-tight tabular-nums transition ${row.tone === 'edge' ? accent.edgeBadge : accent.hopBadge}`}
 									>
 										{deliveryBadge(row.short, badgeLen)}
 									</span>
 									<span class="min-w-0 pt-0.5">
 										<span class="block truncate text-sm font-semibold text-neutral-950"
-											>{deliveryRowName(row, current, direction)}</span
+											>{deliveryHex[option.key] && row.hex
+												? row.hex
+												: deliveryRowName(row, current, direction)}</span
 										>
 										<span class="block text-xs text-neutral-500"
 											>{deliveryRowMeta(row, current, direction)}</span
 										>
 									</span>
-									{#if row.publicKey}
-										<ExternalLink
-											size={13}
-											class="ml-auto mt-1 shrink-0 text-neutral-300 transition group-hover:text-teal-700"
-										/>
-									{/if}
+									<span class="ml-auto mt-0.5 flex shrink-0 items-center gap-1.5">
+										{#if row.conflict}
+											<span
+												class="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
+												title={conflictTitle(row)}
+											>
+												<AlertTriangle size={11} />
+												{(row.alternatives?.length ?? 0) + 1}
+											</span>
+										{/if}
+										{#if row.publicKey}
+											<ExternalLink size={13} class={`mt-0.5 transition ${accent.link}`} />
+										{/if}
+									</span>
 								</button>
 							{/each}
 						</div>
@@ -1905,7 +2082,11 @@
 	}
 
 	.delivery-row:not(:last-child)::before {
-		background: linear-gradient(180deg, rgba(20, 184, 166, 0.36), rgba(212, 212, 212, 0.72));
+		background: linear-gradient(
+			180deg,
+			var(--delivery-line, rgba(20, 184, 166, 0.36)),
+			rgba(212, 212, 212, 0.72)
+		);
 		content: '';
 		height: calc(100% + 0.75rem);
 		left: 1.25rem;

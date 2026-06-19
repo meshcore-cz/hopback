@@ -7,6 +7,8 @@ export const en = {
 
 	'header.tagline': 'MeshCore diagnostics',
 	'footer.credit': 'Open source, created by Czech MeshCore Community ·',
+	'network.scope': 'This instance covers the {name} MeshCore network only.',
+	'network.scopeLink': 'Learn more',
 
 	'lang.label': 'Language',
 	'lang.en': 'English',
@@ -190,6 +192,9 @@ export const en = {
 	'delivery.userPending': 'User receipt pending',
 	'delivery.hop': 'Hop {n}',
 	'delivery.waiting': 'Waiting for a real observed path.',
+	'delivery.conflict': '{n} nodes share this path hash',
+	'delivery.conflictOthers': 'Could also be:',
+	'delivery.hashWidth': 'Path-hash addressing width (bytes per hop)',
 
 	'stats2.title': 'Paths statistics',
 	'stats2.uniquePaths': 'Unique paths',
@@ -211,6 +216,11 @@ export const en = {
 	'obs.col.distance': 'Distance',
 	'obs.col.path': 'Path',
 	'obs.waiting': 'Waiting for matching packets.',
+	'obs.path.hex': 'Hex',
+	'obs.path.names': 'Names',
+	'obs.path.toggle': 'Toggle path between node names and raw hex hashes',
+	'obs.path.outOfRange':
+		'Resolved over 2000 km from the endpoint — likely a path-hash collision, excluded from distances and the map.',
 
 	'route.userToEndpoint': 'User to endpoint',
 	'route.endpointToUser': 'Endpoint to user',

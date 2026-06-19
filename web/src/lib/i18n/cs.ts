@@ -8,7 +8,9 @@ export const cs: Record<MessageKey | string, string> = {
 	'common.na': 'není',
 
 	'header.tagline': 'MeshCore diagnostika',
-	'footer.credit': 'Otevřený zdroj, vytvořeno českou MeshCore komunitou ·',
+	'footer.credit': 'Otevřený zdrojový kód, vytvořeno českou MeshCore komunitou ·',
+	'network.scope': 'Tato instance pokrývá pouze síť MeshCore {name}.',
+	'network.scopeLink': 'Více informací',
 
 	'lang.label': 'Jazyk',
 	'lang.en': 'English',
@@ -101,7 +103,7 @@ export const cs: Record<MessageKey | string, string> = {
 	'detail.endpoint': 'Koncový bod',
 	'detail.user': 'Uživatel',
 	'detail.card.outbound': 'Odchozí',
-	'detail.card.return': 'Návratový',
+	'detail.card.return': 'Příchozí',
 	'detail.card.elapsed': 'Uplynulo',
 	'detail.card.propagation': 'Šíření',
 	'detail.seen': 'zachyceno',
@@ -129,7 +131,7 @@ export const cs: Record<MessageKey | string, string> = {
 		'Agent koncového bodu je offline, takže Hopback nemůže potvrdit příjem ani odeslat odpověď.',
 	'progress.waiting.endpoint': 'Čekání, až agent koncového bodu uvidí zprávu.',
 	'progress.waiting.reply': 'Agent koncového bodu připravuje odpověď.',
-	'progress.waiting.return': 'Čekání na návratový paket zpět k uživateli.',
+	'progress.waiting.return': 'Čekání na příchozí paket zpět k uživateli.',
 	'progress.waiting.replyAck': 'Čekání na ACK odpovědi koncového bodu.',
 	'progress.waiting.endpointAck': 'Čekání, až koncový bod přijme toto ACK.',
 
@@ -190,11 +192,14 @@ export const cs: Record<MessageKey | string, string> = {
 	'delivery.userPending': 'Příjem uživatelem čeká',
 	'delivery.hop': 'Skok {n}',
 	'delivery.waiting': 'Čekání na skutečně pozorovanou cestu.',
+	'delivery.conflict': 'Tento otisk cesty sdílí {n} uzlů',
+	'delivery.conflictOthers': 'Může to být také:',
+	'delivery.hashWidth': 'Šířka adresování otisku cesty (bajtů na skok)',
 
 	'stats2.title': 'Statistika cest',
 	'stats2.uniquePaths': 'Unikátní cesty',
 	'stats2.outbound': 'Odchozí',
-	'stats2.return': 'Návratové',
+	'stats2.return': 'Příchozí',
 	'stats2.longestHops': 'Nejvíce skoků',
 	'stats2.shortestHops': 'Nejméně skoků',
 	'stats2.longestDistance': 'Nejdelší známá vzdálenost',
@@ -211,6 +216,11 @@ export const cs: Record<MessageKey | string, string> = {
 	'obs.col.distance': 'Vzdálenost',
 	'obs.col.path': 'Cesta',
 	'obs.waiting': 'Čekání na odpovídající pakety.',
+	'obs.path.hex': 'Hex',
+	'obs.path.names': 'Názvy',
+	'obs.path.toggle': 'Přepnout cestu mezi názvy uzlů a surovými hex otisky',
+	'obs.path.outOfRange':
+		'Rozpoznáno přes 2000 km od koncového bodu — pravděpodobně kolize otisku cesty, vyloučeno ze vzdáleností a mapy.',
 
 	'route.userToEndpoint': 'Uživatel ke koncovému bodu',
 	'route.endpointToUser': 'Koncový bod k uživateli',
@@ -222,7 +232,7 @@ export const cs: Record<MessageKey | string, string> = {
 	'route.paths': 'Cesty',
 	'route.propagation': 'Šíření',
 	'route.kind.direct': 'Přímé',
-	'route.kind.flood': 'Záplava',
+	'route.kind.flood': 'Flood',
 	'route.kind.mixed': 'Smíšené',
 	'route.ackPath': 'ACK + PATH',
 	'route.ack': 'ACK',
@@ -234,7 +244,7 @@ export const cs: Record<MessageKey | string, string> = {
 	'route.openNode': 'Otevřít uzel v analyzátoru',
 
 	'metric.outboundHops': 'Odchozí skoky',
-	'metric.returnHops': 'Návratové skoky',
+	'metric.returnHops': 'Příchozí skoky',
 	'metric.reply': 'Odpověď',
 	'metric.expires': 'Vyprší',
 
