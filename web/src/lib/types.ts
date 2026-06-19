@@ -166,6 +166,7 @@ export interface DiagnosticTest {
 	/** Shared node lookup keyed by node key (publicKey or short hash). */
 	nodes: Record<string, NodeRef>;
 	observationCount?: number;
+	propagationMs?: number;
 	deliveryPaths?: Record<Direction, DeliveryPathOption[]>;
 	propagationMap?: PropagationMapData;
 	pathStatistics?: PathStatistics;

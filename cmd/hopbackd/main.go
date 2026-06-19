@@ -212,6 +212,7 @@ type Test struct {
 	Observations           []Observation                   `json:"observations"`
 	Nodes                  map[string]NodeRef              `json:"nodes"`
 	ObservationCount       *int                            `json:"observationCount,omitempty"`
+	PropagationMs          *int64                          `json:"propagationMs,omitempty"`
 	DeliveryPaths          map[string][]DeliveryPathOption `json:"deliveryPaths,omitempty"`
 	PropagationMap         *PropagationMapData             `json:"propagationMap,omitempty"`
 	PathStatistics         *PathStatistics                 `json:"pathStatistics,omitempty"`
@@ -2980,6 +2981,11 @@ func (s *Store) ListVisibleTestMetas(localIDs []string, limit, offset int, eps [
 			return nil, err
 		}
 		t.ObservationCount = &count
+		propagationMs, err := s.testPropagationMs(t.ID)
+		if err != nil {
+			return nil, err
+		}
+		t.PropagationMs = propagationMs
 		out = append(out, *t)
 	}
 	return out, rows.Err()
@@ -3015,9 +3021,55 @@ func (s *Store) GetTestMetas(ids []string, eps []Endpoint) ([]Test, error) {
 			return nil, err
 		}
 		t.ObservationCount = &count
+		propagationMs, err := s.testPropagationMs(t.ID)
+		if err != nil {
+			return nil, err
+		}
+		t.PropagationMs = propagationMs
 		out = append(out, *t)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) testPropagationMs(testID string) (*int64, error) {
+	rows, err := s.db.Query(`
+		select min(created_at), max(created_at)
+		from observations
+		where test_id=?
+			and (decoded_type is null or decoded_type not in ('ACK','PATH','PATH_IDENTITY','RESPONSE','MULTIPART'))
+		group by direction`, testID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var total int64
+	hasPropagation := false
+	for rows.Next() {
+		var first, last string
+		if err := rows.Scan(&first, &last); err != nil {
+			return nil, err
+		}
+		start, err := time.Parse(time.RFC3339Nano, first)
+		if err != nil {
+			continue
+		}
+		end, err := time.Parse(time.RFC3339Nano, last)
+		if err != nil {
+			continue
+		}
+		delta := end.Sub(start)
+		if delta >= 0 {
+			total += delta.Milliseconds()
+			hasPropagation = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if !hasPropagation {
+		return nil, nil
+	}
+	return &total, nil
 }
 
 type metaScanner struct {

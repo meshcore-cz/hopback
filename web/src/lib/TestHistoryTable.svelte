@@ -4,6 +4,7 @@
 	import { AlertCircle, CheckCircle2, CircleDashed, KeyRound } from '@lucide/svelte';
 	import type { DiagnosticTest, TestStatus } from '$lib/types';
 	import { t, localeTag } from '$lib/i18n/index.svelte';
+	import { deriveMilestones, isAckObservation } from '$lib/milestones';
 
 	interface Props {
 		tests: DiagnosticTest[];
@@ -38,14 +39,56 @@
 		};
 	}
 
-	function totalTime(test: DiagnosticTest) {
-		const unfinished =
-			test.status === 'expired' || test.status === 'failed' ? '—' : t('common.pending');
-		if (!test.returnSeenAt) return unfinished;
-		const start = new Date(test.createdAt).getTime();
-		const end = new Date(test.returnSeenAt).getTime();
-		if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return unfinished;
-		return `${((end - start) / 1000).toFixed(1)} s`;
+	function unfinishedTime(test: DiagnosticTest) {
+		return test.status === 'expired' || test.status === 'failed' ? '—' : t('common.pending');
+	}
+
+	function firstObservationAt(test: DiagnosticTest) {
+		if (!test.observations.length) return test.outboundSeenAt || null;
+		return test.observations.reduce<string | null>((earliest, observation) => {
+			if (!earliest) return observation.createdAt;
+			return new Date(observation.createdAt).getTime() < new Date(earliest).getTime()
+				? observation.createdAt
+				: earliest;
+		}, null);
+	}
+
+	function elapsedTime(test: DiagnosticTest) {
+		const milestones = deriveMilestones(test);
+		const startAt = firstObservationAt(test) || milestones.outboundSeenAt;
+		if (!startAt || !milestones.replyEndpointAckAt) return unfinishedTime(test);
+		const start = new Date(startAt).getTime();
+		const end = new Date(milestones.replyEndpointAckAt).getTime();
+		if (!Number.isFinite(start) || !Number.isFinite(end) || end < start)
+			return unfinishedTime(test);
+		return `${((end - start) / 1000).toFixed(1)}s`;
+	}
+
+	function propagationMsFromObservations(test: DiagnosticTest) {
+		if (!test.observations.length) return null;
+		const totals = ['outbound', 'return'].map((direction) => {
+			const times = test.observations
+				.filter((item) => item.direction === direction && !isAckObservation(item))
+				.map((item) => new Date(item.createdAt).getTime())
+				.filter(Number.isFinite);
+			if (!times.length) return null;
+			return Math.max(...times) - Math.min(...times);
+		});
+		if (totals.every((value) => value === null)) return null;
+		return totals.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+	}
+
+	function formatPropagationMs(ms: number) {
+		if (ms < 1000) return `${ms}ms`;
+		return `${(ms / 1000).toFixed(2)}s`;
+	}
+
+	function elapsedWithPropagation(test: DiagnosticTest) {
+		const elapsed = elapsedTime(test);
+		if (elapsed === t('common.pending') || elapsed === '—') return elapsed;
+		const propagationMs = test.propagationMs ?? propagationMsFromObservations(test);
+		if (propagationMs == null) return elapsed;
+		return `${elapsed} (${formatPropagationMs(propagationMs)})`;
 	}
 
 	function formatDateTime(value?: string | null) {
@@ -67,6 +110,16 @@
 		if (delta < 604800) return t('time.daysAgo', { n: Math.floor(delta / 86400) });
 		return t('time.weeksAgo', { n: Math.floor(delta / 604800) });
 	}
+
+	function historyDate(value?: string | null) {
+		if (!value) return '—';
+		const date = new Date(value);
+		const delta = Date.now() - date.getTime();
+		if (Number.isFinite(delta) && delta >= 0 && delta < 24 * 60 * 60 * 1000) {
+			return relativeTime(value);
+		}
+		return formatDateTime(value);
+	}
 </script>
 
 <div class="overflow-x-auto">
@@ -74,19 +127,18 @@
 		<thead class="border-b border-neutral-200 text-xs uppercase text-neutral-500">
 			<tr>
 				<th class="py-2 pr-3 font-semibold">{t('history.col.status')}</th>
-				<th class="px-3 py-2 font-semibold">{t('history.col.endpoint')}</th>
-				<th class="px-3 py-2 font-semibold">{t('history.col.date')}</th>
-				<th class="px-3 py-2 font-semibold">{t('history.col.userKey')}</th>
+				<th class="px-3 py-2 font-semibold">{t('history.col.route')}</th>
 				<th class="px-3 py-2 font-semibold">{t('history.col.code')}</th>
-				<th class="px-3 py-2 font-semibold">{t('history.col.time')}</th>
+				<th class="px-3 py-2 font-semibold">{t('history.col.elapsed')}</th>
 				<th class="px-3 py-2 font-semibold">{t('history.col.observed')}</th>
+				<th class="px-3 py-2 text-right font-semibold">{t('history.col.date')}</th>
 			</tr>
 		</thead>
 		<tbody class="divide-y divide-neutral-100">
 			{#each tests as test, index (test.id)}
 				{@const meta = statusMeta(test.status)}
 				{@const StatusIcon = meta.icon}
-				{@const time = totalTime(test)}
+				{@const time = elapsedWithPropagation(test)}
 				{@const mine = isOwnTest(test)}
 				<tr
 					class={`group cursor-pointer transition-colors ${mine ? 'bg-teal-50/70 hover:bg-teal-100/70' : 'hover:bg-neutral-50'}`}
@@ -101,39 +153,41 @@
 						</span>
 					</td>
 					<td class="px-3 py-2">
-						<div class="flex items-center gap-2">
-							<p class="font-medium text-neutral-950 group-hover:text-teal-800">
-								{test.endpointName}
+						<div
+							class="flex min-w-0 items-center gap-2"
+							title={`${test.userPublicKey} ↔ ${test.endpointName}`}
+						>
+							<KeyRound size={14} class="shrink-0 text-neutral-500" />
+							<p class="min-w-0 truncate font-medium text-neutral-950 group-hover:text-teal-800">
+								<span class="mono">{test.userPublicKey.slice(0, 8)}</span>
+								<span class="mx-1 text-neutral-400">↔</span>
+								<span>{test.endpointName}</span>
 							</p>
 							{#if mine}
 								<span
-									class="rounded bg-teal-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-teal-800"
+									class="shrink-0 rounded bg-teal-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-teal-800"
 								>
 									{t('history.mine')}
 								</span>
 							{/if}
 						</div>
 					</td>
-					<td class="whitespace-nowrap px-3 py-2 text-neutral-600">
-						<span title={relativeTime(test.createdAt)}>{formatDateTime(test.createdAt)}</span>
-					</td>
-					<td class="mono px-3 py-2 text-xs text-neutral-500">
-						<span class="inline-flex items-center gap-1">
-							<KeyRound size={13} />
-							{test.userPublicKey.slice(0, 10)}
-						</span>
-					</td>
 					<td class="mono px-3 py-2 font-semibold text-neutral-800">{test.code}</td>
 					<td class="px-3 py-2 text-neutral-600">
-						<span class={time === 'pending' || time === '—' ? 'opacity-50' : ''}>{time}</span>
+						<span class={time === t('common.pending') || time === '—' ? 'opacity-50' : ''}
+							>{time}</span
+						>
 					</td>
 					<td class="px-3 py-2 text-neutral-600">
 						{test.observationCount ?? test.observations.length}
 					</td>
+					<td class="whitespace-nowrap px-3 py-2 text-right text-neutral-600">
+						<span title={formatDateTime(test.createdAt)}>{historyDate(test.createdAt)}</span>
+					</td>
 				</tr>
 			{:else}
 				<tr>
-					<td colspan="7" class="py-5 text-center text-sm text-neutral-500">
+					<td colspan="6" class="py-5 text-center text-sm text-neutral-500">
 						{loading ? t('tests.loading') : emptyText}
 					</td>
 				</tr>
