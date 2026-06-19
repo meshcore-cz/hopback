@@ -234,15 +234,15 @@ type Observation struct {
 	ObserverID   *string   `json:"observerId,omitempty"`
 	ObserverName *string   `json:"observerName,omitempty"`
 	ObserverKey  *string   `json:"observerKey,omitempty"`
-	HopCount int       `json:"hopCount"`
-	Path     []string  `json:"path"`
-	PathKeys []*string `json:"pathKeys"`
+	HopCount     int       `json:"hopCount"`
+	Path         []string  `json:"path"`
+	PathKeys     []*string `json:"pathKeys"`
 	// PathBytes is the packet header's path-hash addressing width in bytes (1/2/3).
 	// Captured from the packet even for direct (0-hop) packets, whose empty path
 	// otherwise carries no width. 0 when unknown.
-	PathBytes int `json:"pathBytes,omitempty"`
-	DistanceKm   *float64  `json:"distanceKm,omitempty"`
-	DecodedType  *string   `json:"decodedType,omitempty"`
+	PathBytes   int      `json:"pathBytes,omitempty"`
+	DistanceKm  *float64 `json:"distanceKm,omitempty"`
+	DecodedType *string  `json:"decodedType,omitempty"`
 	// Route is the packet header's routing method ("direct" or "flood"), i.e. how
 	// the packet was actually sent — not inferred from hop counts.
 	Route     *string `json:"route,omitempty"`
@@ -289,7 +289,7 @@ type DeliveryPathRow struct {
 }
 
 type DeliveryPathOption struct {
-	Key           string            `json:"key"`
+	Key       string `json:"key"`
 	Direction string `json:"direction"`
 	Kind      string `json:"kind"`
 	// Kinds lists every packet kind that resolved to this exact route (same relays
@@ -1492,7 +1492,6 @@ func pathStatistics(t *Test) *PathStatistics {
 	}
 	return &PathStatistics{TotalPaths: len(uniqueAll), OutboundPaths: len(uniqueOut), ReturnPaths: len(uniqueReturn), LongestDistanceKm: longestDistance, LongestDistanceLabel: longestLabel, LongestHopCount: longestHop, ShortestHopCount: shortestHop, AverageDistanceKm: avg}
 }
-
 
 func nodeKey(value string, nodes map[string]NodeRef) string {
 	value = strings.ToLower(strings.TrimSpace(value))

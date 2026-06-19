@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Type check
+        run: npm run check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test
+
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      # Development go.mod points meshcore-go at a local ../meshcore-go checkout.
+      # On CI resolve it from the published module instead.
+      - name: Resolve meshcore-go from upstream
+        run: |
+          go mod edit \
+            -dropreplace=github.com/meshcore-cz/meshcore-go \
+            -droprequire=github.com/meshcore-cz/meshcore-go
+          go get github.com/meshcore-cz/meshcore-go@main
+          go mod tidy
+
+      # hopbackd embeds cmd/hopbackd/frontend via //go:embed; provide a stub so
+      # the package compiles without a full frontend build.
+      - name: Stub embedded frontend
+        run: |
+          mkdir -p cmd/hopbackd/frontend
+          echo 'placeholder' > cmd/hopbackd/frontend/index.html
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l cmd internal)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./cmd/... ./internal/...
+
+      - name: Build
+        run: go build ./cmd/... ./internal/...
+
+      - name: Test
+        run: go test ./cmd/... ./internal/...
