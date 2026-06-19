@@ -200,8 +200,8 @@ export const en = {
 	'progress.step.endpointSaw': 'Endpoint saw it',
 	'progress.step.replySent': 'Reply sent',
 	'progress.step.replySeen': 'Reply seen',
-	'progress.step.ackSeen': 'ACK seen',
-	'progress.step.ackReturned': 'ACK returned',
+	'progress.step.ackSeen': 'Reply confirmation seen',
+	'progress.step.ackReturned': 'Reply confirmation arrived',
 
 	'progress.detail.outboundSeen': '{observers} saw your message{after}.',
 	'progress.detail.outboundSeenWaiting':

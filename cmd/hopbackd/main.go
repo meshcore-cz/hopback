@@ -1123,6 +1123,28 @@ func (rt *Runtime) isEndpointSource(source, endpointID string) bool {
 	return ep != nil && ep.ID == endpointID
 }
 
+// headerPathIsTaken reports whether a packet's header path can be trusted as the
+// route the packet actually travelled to reach this observer.
+//
+// Flood packets accumulate each relay's hash as they propagate, so their header
+// path IS the path taken — always trustworthy. Direct (unicast) packets instead
+// carry the route the sender DECLARED for the message to follow; that declared
+// route is identical on every copy regardless of how far it actually travelled,
+// so recording it as the taken path makes a direct message overheard right next
+// to the source look like it traversed the whole route. We therefore drop the
+// header path (0 hops) for any overhearing observer of a direct packet, keeping
+// it only for the test's own endpoint — the real destination, whose copy is a
+// genuine traversal.
+func (rt *Runtime) headerPathIsTaken(pkt *meshpkt.Packet, event PacketEvent, t *Test) bool {
+	if pkt.Route != meshpkt.RouteDirect && pkt.Route != meshpkt.RouteTransportDirect {
+		return true
+	}
+	if rt.isEndpointSource(event.Source, t.EndpointID) {
+		return true
+	}
+	return event.ObserverID != nil && strings.EqualFold(*event.ObserverID, t.EndpointPublicKey)
+}
+
 func (rt *Runtime) endpointReady(id string) bool {
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
@@ -2108,7 +2130,7 @@ func (rt *Runtime) recordPacket(event PacketEvent, testID, direction, typ string
 	}
 	now := captured.UTC().Format(tsMillis)
 	path := event.Path
-	if len(path) == 0 && pkt != nil {
+	if len(path) == 0 && pkt != nil && rt.headerPathIsTaken(pkt, event, active.Test) {
 		for _, hop := range pkt.Hops() {
 			path = append(path, hex.EncodeToString(hop))
 		}

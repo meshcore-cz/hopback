@@ -203,8 +203,8 @@ export const cs: Record<MessageKey | string, string> = {
 	'progress.step.endpointSaw': 'Koncový bod uviděl',
 	'progress.step.replySent': 'Odpověď odeslána',
 	'progress.step.replySeen': 'Odpověď zachycena',
-	'progress.step.ackSeen': 'ACK zachyceno',
-	'progress.step.ackReturned': 'ACK vráceno',
+	'progress.step.ackSeen': 'Potvrzení odpovědi zachyceno',
+	'progress.step.ackReturned': 'Potvrzení odpovědi dorazilo',
 
 	'progress.detail.outboundSeen': '{observers} vidělo vaši zprávu{after}.',
 	'progress.detail.outboundSeenWaiting': 'Čekáme, až pozorovatelé zachytí vaši první zprávu.',
