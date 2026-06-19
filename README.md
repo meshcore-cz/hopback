@@ -130,7 +130,16 @@ make release VERSION=v0.9.1
 
 The release target checks the tree, updates `package.json` to the unprefixed version (`0.9.1`), commits it, tags `v0.9.1`, and pushes the branch and tag. Makefile targets read the package version and stamp it into the Go backend and agent with `-ldflags`.
 
-Pushing a `v*` tag also triggers the `Release Binaries` workflow, which builds `hopbackd` and `hopback-agent` for Linux (`amd64`/`arm64`) and macOS (`amd64`/`arm64`), then attaches the `.tar.gz` archives and `SHA256SUMS` to the GitHub Release. The `Docker Images` workflow publishes the matching GHCR images.
+Pushing a `v*` tag also triggers the `Release Binaries` workflow, which builds `hopbackd` and `hopback-agent` for Linux (`amd64`/`arm64`) and macOS (`amd64`/`arm64`), attaches the `.tar.gz` archives and `SHA256SUMS` to the GitHub Release, and updates the `hopbackd` and `hopback-agent` formulae in [`meshcore-cz/homebrew-tap`](https://github.com/meshcore-cz/homebrew-tap). The `Docker Images` workflow publishes the matching GHCR images.
+
+> The tap update needs a `HOMEBREW_TAP_TOKEN` repository secret — a token with `contents:write` on `meshcore-cz/homebrew-tap`. Without it, the release still publishes; only the Homebrew bump is skipped.
+
+### Homebrew
+
+```sh
+brew install meshcore-cz/tap/hopbackd
+brew install meshcore-cz/tap/hopback-agent
+```
 
 ### Prebuilt Binaries
 

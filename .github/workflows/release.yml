@@ -124,3 +124,47 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
+
+  update-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+
+      - name: Generate checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+
+      - uses: actions/checkout@v4
+        with:
+          repository: meshcore-cz/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Render formulae
+        env:
+          REPO: meshcore-cz/hopback
+          SUMS_FILE: ${{ github.workspace }}/dist/SHA256SUMS
+          OUT_DIR: ${{ github.workspace }}/tap/Formula
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          export VERSION="${TAG#v}"
+          FORMULA_NAME=hopbackd CLASS=Hopbackd BIN=hopbackd \
+            DESC="Hopback MeshCore diagnostic web backend" \
+            bash tap/scripts/render-formula.sh
+          FORMULA_NAME=hopback-agent CLASS=HopbackAgent BIN=hopback-agent \
+            DESC="Hopback MeshCore radio bridge agent" \
+            bash tap/scripts/render-formula.sh
+
+      - name: Commit and push
+        run: |
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/hopbackd.rb Formula/hopback-agent.rb
+          if git diff --cached --quiet; then echo "formulae unchanged"; exit 0; fi
+          git commit -m "hopback ${{ github.event.inputs.tag || github.ref_name }}"
+          git push
