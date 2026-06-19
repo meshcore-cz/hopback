@@ -209,9 +209,7 @@ endpoints:
     # Unique per-endpoint agent secret; the agent presents this and the backend
     # associates it with this endpoint. Falls back to service.agentSecret.
     agentSecret: change-this-endpoint-secret
-    location:
-      lat: 50.478
-      lon: 13.975
+    location: 50.478,13.975
 ```
 
 Backend/web secrets belong in the ignored local `config.yaml`. For packet decryption and replies, each endpoint needs either its own `privateKey` or the optional `service.privateKey` fallback in YAML.

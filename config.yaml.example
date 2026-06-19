@@ -54,6 +54,5 @@ endpoints:
     # Use either the original identity seed (64 hex) or a MeshCore Companion expanded key
     # (128 hex). Do not pass a 128-hex expanded key to identity-seed encoders.
     # privateKey: 128hex-private-key
-    location:
-      lat: 50.478
-      lon: 13.975
+    # Coordinates as a single "lat,lon" string.
+    location: 50.478,13.975

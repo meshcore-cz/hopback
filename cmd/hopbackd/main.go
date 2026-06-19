@@ -123,8 +123,37 @@ type Endpoint struct {
 }
 
 type Location struct {
-	Lat *float64 `json:"lat,omitempty" yaml:"lat"`
-	Lon *float64 `json:"lon,omitempty" yaml:"lon"`
+	Lat *float64 `json:"lat,omitempty"`
+	Lon *float64 `json:"lon,omitempty"`
+}
+
+// UnmarshalYAML accepts a compact "lat,lon" scalar (e.g. location: 50.478,13.975)
+// so endpoints declare coordinates on one line. It still serializes to JSON as
+// {lat, lon} for the frontend.
+func (l *Location) UnmarshalYAML(value *yaml.Node) error {
+	var raw string
+	if err := value.Decode(&raw); err != nil {
+		return fmt.Errorf("location must be a \"lat,lon\" string: %w", err)
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	lat, lon, ok := strings.Cut(raw, ",")
+	if !ok {
+		return fmt.Errorf("location %q must be in \"lat,lon\" form", raw)
+	}
+	latV, err := strconv.ParseFloat(strings.TrimSpace(lat), 64)
+	if err != nil {
+		return fmt.Errorf("invalid latitude in location %q: %w", raw, err)
+	}
+	lonV, err := strconv.ParseFloat(strings.TrimSpace(lon), 64)
+	if err != nil {
+		return fmt.Errorf("invalid longitude in location %q: %w", raw, err)
+	}
+	l.Lat = &latV
+	l.Lon = &lonV
+	return nil
 }
 
 type RuntimeStatus struct {
