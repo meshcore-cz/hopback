@@ -1088,6 +1088,38 @@ func (rt *Runtime) endpoint(id string) *Endpoint {
 	return nil
 }
 
+// endpointForSource returns the endpoint served by the agent that produced an
+// "agent:<id>" observation source, or nil when the source is not an agent or no
+// endpoint owns that agent id. The id embedded in the source is the endpoint's
+// configured agentId (falling back to "agent-<endpointID>"), so it maps back to
+// exactly one endpoint — this is how we tell a test's own endpoint agent apart
+// from other agents that merely overheard the same RF packet.
+func (rt *Runtime) endpointForSource(source string) *Endpoint {
+	id, ok := strings.CutPrefix(source, "agent:")
+	if !ok {
+		return nil
+	}
+	for i := range rt.cfg.Endpoints {
+		ep := &rt.cfg.Endpoints[i]
+		agentID := ep.AgentID
+		if agentID == "" {
+			agentID = "agent-" + ep.ID
+		}
+		if agentID == id {
+			return ep
+		}
+	}
+	return nil
+}
+
+// isEndpointSource reports whether an observation source is the agent that serves
+// the given test's bound endpoint — i.e. this test's endpoint actually heard the
+// packet, rather than some other endpoint's agent overhearing it on the mesh.
+func (rt *Runtime) isEndpointSource(source, endpointID string) bool {
+	ep := rt.endpointForSource(source)
+	return ep != nil && ep.ID == endpointID
+}
+
 func (rt *Runtime) endpointReady(id string) bool {
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
@@ -1142,6 +1174,15 @@ func (rt *Runtime) decorate(t *Test) *Test {
 		}
 		if t.Observations[i].PathKeys == nil {
 			t.Observations[i].PathKeys = []*string{}
+		}
+		// Label agent-sourced observations with their endpoint's name so the UI
+		// shows "Kololeč" rather than the raw "agent:agent-kololec" source — and so
+		// foreign agents are distinguishable from this test's own endpoint.
+		o := &t.Observations[i]
+		if strVal(o.ObserverName) == "" {
+			if ep := rt.endpointForSource(o.Source); ep != nil {
+				o.ObserverName = ptr(ep.Name)
+			}
 		}
 	}
 	rt.resolveObservationNodes(t)
@@ -1291,7 +1332,7 @@ func (rt *Runtime) observationDistanceKm(t *Test, obs Observation) *float64 {
 
 func (rt *Runtime) isEndpointObs(t *Test, obs Observation) bool {
 	if strings.HasPrefix(obs.Source, "agent:") {
-		return true
+		return rt.isEndpointSource(obs.Source, t.EndpointID)
 	}
 	return obs.ObserverID != nil && strings.EqualFold(*obs.ObserverID, t.EndpointPublicKey)
 }
@@ -1982,7 +2023,7 @@ func (rt *Runtime) processPacket(event PacketEvent) {
 				dir = "return"
 			}
 			recorded := rt.recordPacket(event, active.Test.ID, dir, decoded.Type, &pkt, decoded.Text)
-			if recorded && dir == "outbound" && autoReply(rt.cfg) && strings.HasPrefix(event.Source, "agent:") {
+			if recorded && dir == "outbound" && autoReply(rt.cfg) && rt.isEndpointSource(event.Source, active.Test.EndpointID) {
 				if t, _ := rt.getTest(active.Test.ID); t != nil {
 					rt.sendReply(t)
 				}
@@ -2141,7 +2182,7 @@ func (rt *Runtime) recordPacket(event PacketEvent, testID, direction, typ string
 
 func (rt *Runtime) applyFactsLocked(t *Test, obs Observation, rawHex string) {
 	now := obs.CreatedAt
-	isEndpoint := strings.HasPrefix(obs.Source, "agent:")
+	isEndpoint := rt.isEndpointSource(obs.Source, t.EndpointID)
 	if obs.ObserverID != nil && strings.EqualFold(*obs.ObserverID, t.EndpointPublicKey) {
 		isEndpoint = true
 	}

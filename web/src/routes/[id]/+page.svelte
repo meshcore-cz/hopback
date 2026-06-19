@@ -1197,10 +1197,11 @@
 	function isEndpointObservation(observation: PacketObservation, current: DiagnosticTest) {
 		const observer = (observation.observerId || observation.observerKey || '').toLowerCase();
 		const endpointKey = current.endpointPublicKey.toLowerCase();
+		// Only the agent serving this endpoint counts as the endpoint; a foreign
+		// agent that overheard the packet is just another observer (see milestones.ts).
 		return (
-			observation.source.startsWith('agent:') ||
 			observer === endpointKey ||
-			Boolean(observation.observerName?.toLowerCase().includes(current.endpointName.toLowerCase()))
+			Boolean(observation.observerName?.toLowerCase() === current.endpointName.toLowerCase())
 		);
 	}
 

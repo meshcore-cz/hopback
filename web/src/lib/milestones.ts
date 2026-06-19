@@ -96,10 +96,13 @@ export function isReplyAck(observation: PacketObservation) {
 export function isEndpointObservation(observation: PacketObservation, test: DiagnosticTest) {
 	const observer = (observation.observerId || observation.observerKey || '').toLowerCase();
 	const endpointKey = test.endpointPublicKey.toLowerCase();
+	// An agent source only counts as this test's endpoint when it serves this
+	// endpoint: the backend labels every agent observation with its endpoint's
+	// name, so a foreign agent that merely overheard the packet (e.g. "Kololeč"
+	// on a "Kolín" test) stays a normal observer instead of faking endpoint receipt.
 	return (
-		observation.source.startsWith('agent:') ||
 		observer === endpointKey ||
-		Boolean(observation.observerName?.toLowerCase().includes(test.endpointName.toLowerCase()))
+		Boolean(observation.observerName?.toLowerCase() === test.endpointName.toLowerCase())
 	);
 }
 
