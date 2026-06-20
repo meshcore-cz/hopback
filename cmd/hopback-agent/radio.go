@@ -37,7 +37,9 @@ func newRadio(cfg AgentConfig) (Radio, error) {
 	switch u.Scheme {
 	case "ipc+unix", "ipc+tcp":
 		return NewIPCRadio(cfg.MeshCoreURI, cfg.MeshCoreDevice), nil
-	case "tcp":
+	case "tcp", "serial", "ble":
+		// CompanionRadio speaks the companion protocol directly over any
+		// meshcore-go transport: TCP, a USB serial port, or a BLE companion.
 		return NewCompanionRadio(cfg.MeshCoreURI), nil
 	default:
 		return nil, fmt.Errorf("unsupported MESHCORE_URI scheme %q", u.Scheme)

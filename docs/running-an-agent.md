@@ -62,6 +62,28 @@ You need a machine that can reach:
 
 A Raspberry Pi, home server, VPS, Mac, or similar machine is sufficient.
 
+### MeshCore firmware
+
+The radio must run **MeshCore companion firmware 1.16.0 or newer**.
+
+Hopback transmits raw packets using `CMD_SEND_RAW_PACKET`, which was introduced
+in firmware 1.16.0. On older firmware the agent can still observe RF traffic, but
+any send (for example, reply routing or path tests) will fail. Update the radio's
+firmware before connecting it to an agent.
+
+### Configure the radio's regional settings first
+
+> **Set the radio's region before connecting it to an agent.**
+
+Before starting the agent, use the MeshCore companion app (or your usual MeshCore
+tooling) to configure the radio's **regional RF parameters** — frequency,
+bandwidth, spreading factor, and coding rate — for your region.
+
+The agent forwards and transmits raw packets exactly as the radio sees them. It
+does **not** set or change any radio parameters. If the radio is on the wrong
+frequency or LoRa settings, it will sit on the wrong channel: the agent will show
+as online but observe no packets, and transmitted packets will not reach the mesh.
+
 ---
 
 ## Step 2 — Install the agent
